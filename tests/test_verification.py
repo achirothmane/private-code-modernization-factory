@@ -7,7 +7,10 @@ from modfactory.slices import build_migration_slices
 from modfactory.verification import build_differential_verification, write_verification
 
 
-def _add_baseline(root: Path, test_body: str = "import unittest\\n\\nclass T(unittest.TestCase):\\n    def test_x(self): self.assertTrue(True)\\n") -> None:
+def _add_baseline(
+    root: Path,
+    test_body: str = "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self): self.assertTrue(True)\n",
+) -> None:
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / "test_app.py").write_text(test_body, encoding="utf-8")
     (root / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
@@ -38,7 +41,7 @@ class DifferentialVerificationTests(unittest.TestCase):
 
             result = build_differential_verification(root, snap, slice_id)
 
-            self.assertEqual(result["status"], "REVIEW")
+            self.assertEqual(result["status"], "REVIEW", result)
             self.assertEqual(result["reason"], "static-pass-project-tests-not-executed")
             self.assertTrue(result["static_checks"]["target_finding_removed_after"])
             self.assertFalse(result["static_checks"]["new_findings"])
@@ -68,7 +71,7 @@ class DifferentialVerificationTests(unittest.TestCase):
                 timeout_seconds=30,
             )
 
-            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["status"], "PASS", result)
             self.assertEqual(result["verification_level"], "tests")
             self.assertTrue(result["project_tests"]["executed"])
             self.assertTrue(result["deployment_admissible"])
@@ -95,7 +98,7 @@ class DifferentialVerificationTests(unittest.TestCase):
                 timeout_seconds=30,
             )
 
-            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(result["status"], "BLOCKED", result)
             self.assertEqual(result["reason"], "baseline-failed-before")
 
     def test_shell_metacharacter_test_command_is_blocked(self):
@@ -107,7 +110,10 @@ class DifferentialVerificationTests(unittest.TestCase):
             )
             (root / "requirements.txt").write_text("", encoding="utf-8")
             (root / "tests").mkdir()
-            (root / "tests" / "test_app.py").write_text("def test_x(): assert True\n", encoding="utf-8")
+            (root / "tests" / "test_app.py").write_text(
+                "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
             (root / ".github" / "workflows").mkdir(parents=True)
             (root / ".github" / "workflows" / "ci.yml").write_text(
                 "name: ci\njobs:\n  test:\n    steps:\n      - run: python -m unittest discover -s tests -v && echo unsafe\n",
@@ -123,7 +129,7 @@ class DifferentialVerificationTests(unittest.TestCase):
                 timeout_seconds=30,
             )
 
-            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(result["status"], "BLOCKED", result)
             self.assertEqual(result["reason"], "baseline-failed-before")
             self.assertEqual(result["project_tests"]["before"][0]["status"], "BLOCKED")
 
