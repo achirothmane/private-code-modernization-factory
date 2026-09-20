@@ -10,6 +10,7 @@ from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal
 from .recipes import build_recipe_instances
 from .scanner import scan_repository
 from .slices import build_migration_slices
+from .targets import merge_targets
 
 
 SEMANTIC_ESCALATION_REASONS = {
@@ -92,10 +93,12 @@ def benchmark_repository(
     source_repo: str | None = None,
     commit: str | None = None,
     diff_budget: int = DEFAULT_DIFF_BUDGET,
+    targets: dict[str, str] | None = None,
 ) -> dict[str, object]:
     root = Path(path).resolve()
     started = time.perf_counter()
-    snapshot = scan_repository(root)
+    target_profile = dict(targets or {})
+    snapshot = scan_repository(root, targets=target_profile)
     commands = discover_commands(root, snapshot)
     recipes = build_recipe_instances(snapshot.findings)
     slices = build_migration_slices(snapshot)
@@ -145,6 +148,7 @@ def benchmark_repository(
         "path": str(root),
         "source_repo": source_repo,
         "commit": commit,
+        "target_profile": target_profile,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
         "files": snapshot.files,
         "lines": snapshot.lines,
@@ -195,8 +199,10 @@ def benchmark_corpus(
     *,
     manifest_path: str | Path | None = None,
     diff_budget: int = DEFAULT_DIFF_BUDGET,
+    targets: dict[str, str] | None = None,
 ) -> dict[str, object]:
     root = Path(corpus_root).resolve()
+    global_targets = dict(targets or {})
     entries = _load_manifest(manifest_path, root)
     repositories: list[dict[str, object]] = []
     errors: list[dict[str, str]] = []
@@ -222,6 +228,10 @@ def benchmark_corpus(
                     source_repo=str(entry.get("repo") or "") or None,
                     commit=str(entry.get("commit") or "") or None,
                     diff_budget=diff_budget,
+                    targets=merge_targets(
+                        global_targets,
+                        entry.get("targets") if isinstance(entry.get("targets"), dict) else None,
+                    ),
                 )
             )
         except Exception as exc:
@@ -249,7 +259,8 @@ def benchmark_corpus(
     )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "global_target_profile": global_targets,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
         "repositories_requested": len(entries),
         "repositories_analyzed": len(repositories),
@@ -304,15 +315,16 @@ def render_benchmark_markdown(result: dict[str, object]) -> str:
         "",
         "## Repositories",
         "",
-        "| Repository | Band | Files | Lines | Compat | Proposed | Semantic | Safety | Escalation |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Repository | Targets | Band | Files | Lines | Compat | Proposed | Semantic | Safety | Escalation |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for item in result["repositories"]:
         esc = item.get("escalation", {})
         lines.append(
-            f"| {item['name']} | {item['workload_band']} | {item['source_files']} | "
-            f"{item['lines']} | {item['compatibility_slices']} | {item['patch_proposals']} | "
-            f"{item['semantic_escalations']} | {item['safety_blockers']} | {esc.get('tier')} |"
+            f"| {item['name']} | {item.get('target_profile') or '-'} | {item['workload_band']} | "
+            f"{item['source_files']} | {item['lines']} | {item['compatibility_slices']} | "
+            f"{item['patch_proposals']} | {item['semantic_escalations']} | "
+            f"{item['safety_blockers']} | {esc.get('tier')} |"
         )
 
     errors = result.get("errors", [])
