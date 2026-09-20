@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+from .commands import discover_commands
 from .models import RepoSnapshot
 from .slices import build_migration_slices
 
@@ -136,6 +137,7 @@ def build_patch_proposal(
     diff_budget: int = DEFAULT_DIFF_BUDGET,
 ) -> dict[str, object]:
     root_path = Path(root).resolve()
+    snapshot_root = Path(snapshot.root).resolve()
     slices = build_migration_slices(snapshot)
     selected = next((item for item in slices if item.get("id") == slice_id), None)
 
@@ -156,9 +158,27 @@ def build_patch_proposal(
     if selected is None:
         return {**base, "reason": "migration-slice-not-found"}
 
+    base["slice"] = selected
+
+    if snapshot_root != root_path:
+        return {**base, "reason": "snapshot-root-mismatch"}
+
+    commands = discover_commands(root_path, snapshot)
+    test_commands = [item for item in commands if item.get("kind") == "test"]
+    base["baseline_evidence"] = {
+        "test_files": list(snapshot.test_files),
+        "ci_files": list(snapshot.ci_files),
+        "test_commands": test_commands,
+    }
+    if not snapshot.test_files:
+        return {**base, "reason": "baseline-tests-missing"}
+    if not snapshot.ci_files:
+        return {**base, "reason": "baseline-ci-missing"}
+    if not test_commands:
+        return {**base, "reason": "baseline-test-command-not-discovered"}
+
     target = str(selected.get("target", ""))
     recipe = selected.get("recipe")
-    base["slice"] = selected
     base["allowed_files"] = [target] if target and target != "." else []
 
     if selected.get("kind") != "compatibility":
