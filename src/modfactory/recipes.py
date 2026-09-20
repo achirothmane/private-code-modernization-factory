@@ -147,15 +147,18 @@ RECIPES: tuple[MigrationRecipe, ...] = (
         id="reactdom-render-to-createroot",
         title="Migrate ReactDOM.render to createRoot",
         finding_messages=("Legacy React render API detected",),
-        confidence="medium",
-        strategy="framework-entrypoint-migration",
+        confidence="high",
+        strategy="constrained-mechanical-root-migration",
         preconditions=(
             "Application boot/render smoke test exists.",
-            "Current React and react-dom versions are known.",
+            "Current or explicit target react-dom version is 18+.",
+            "Each migrated render target matches a supported root-lifetime pattern.",
         ),
         transforms=(
-            "Import createRoot from react-dom/client.",
-            "Create the root once for the existing container and call root.render().",
+            "Replace the default ReactDOM import with createRoot from react-dom/client.",
+            "For one-shot containers, create the root at the render call.",
+            "For reused named containers, create and retain exactly one root for that container.",
+            "Block unrecognized container lifetime patterns instead of guessing.",
             "Do not mix this slice with unrelated component rewrites.",
         ),
         verification=(

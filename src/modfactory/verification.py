@@ -19,11 +19,19 @@ UNSAFE_COMMAND_TOKENS = ("|", ";", "&", ">", "<", "\x60", "$(", "\n", "\r")
 
 
 def _finding_key(item: object) -> tuple[str, str, str]:
-    return (
-        str(getattr(item, "category", "")),
-        str(getattr(item, "path", "")),
-        str(getattr(item, "message", "")),
-    )
+    category = str(getattr(item, "category", ""))
+    path = str(getattr(item, "path", ""))
+    message = str(getattr(item, "message", ""))
+    severity = str(getattr(item, "severity", ""))
+
+    # Line counts are evidence, not finding identity. A one-line safe patch in an
+    # already-large file must not look like a brand-new regression merely because
+    # the numeric count embedded in the message changed. Severity changes remain
+    # visible (for example medium -> high).
+    if category == "maintainability" and message.startswith("Large source file ("):
+        message = f"Large source file [{severity}]"
+
+    return (category, path, message)
 
 
 def _copy_repository(source: Path, destination: Path) -> None:
@@ -56,7 +64,7 @@ def _materialize_after_tree(
     except (OSError, UnicodeError) as exc:
         return False, f"target-read-failed: {exc}"
 
-    after, blocked_reason = _apply_recipe(recipe_id, before)
+    after, blocked_reason = _apply_recipe(recipe_id, before, target)
     if blocked_reason:
         return False, f"transform-blocked: {blocked_reason}"
     if after == before:
@@ -207,8 +215,8 @@ def build_differential_verification(
         if not ok:
             return {**base, "reason": "after-tree-materialization-failed", "detail": materialize_error}
 
-        before_snapshot = scan_repository(before_root)
-        after_snapshot = scan_repository(after_root)
+        before_snapshot = scan_repository(before_root, targets=snapshot.target_profile)
+        after_snapshot = scan_repository(after_root, targets=snapshot.target_profile)
 
         before_keys = {_finding_key(item) for item in before_snapshot.findings}
         after_keys = {_finding_key(item) for item in after_snapshot.findings}

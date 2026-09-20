@@ -154,6 +154,42 @@ This falsifies the stronger compute claim:
 
 No model was invoked in Wave 7D. The next wave must compare ordinary-model outputs on the exact same four tasks before any long-context or B300-class experiment is considered.
 
+## Wave 7E: Deterministic Falsification Before Model Inference
+
+Wave 7E began with the plan to benchmark an ordinary model on the four React 18 migration tasks from Wave 7D. Before spending inference, the same tasks were tested against a narrower hypothesis: can their semantics be encoded deterministically without guessing?
+
+The answer for this pinned case is yes.
+
+A constrained `reactdom-render-to-createroot` transform now supports only three root-lifetime patterns:
+
+- `document.getElementById(...)` entry roots;
+- one-shot containers produced by `appendChild(...)`;
+- reusable named containers created with `document.createElement(...)`, where exactly one persistent React root is retained.
+
+Any other container-lifetime shape remains blocked instead of being rewritten speculatively.
+
+Real benchmark on `h2oai/wave@fff04af6d92584d75ce7e946d2c449230461dfcb` with explicit target `react-dom=18`:
+
+- React compatibility slices: 4
+- deterministic patch proposals: 4 / 4
+- static differential verification passes: 4 / 4
+- target migration findings removed: 4 / 4
+- new findings after verification: 0
+- semantic escalations: 0
+- eligible model-evaluation tasks: 0
+- model inference run: false
+- project code executed: false
+- final tier: **DETERMINISTIC**
+- B300 rental recommended: false
+
+Changed-line counts were 9, 4, 4, and 6 for the four real files.
+
+This falsified the Wave 7D next-step hypothesis before inference:
+
+**a task that survives evidence/target/context gates can still become deterministic after its semantic shape is understood.**
+
+The ordinary-model benchmark is therefore not justified for these four React tasks. A model benchmark should be opened only when a future real case still has eligible semantic tasks after deterministic-transform discovery.
+
 ## Compute gate
 
 Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
@@ -163,7 +199,8 @@ A model benchmark is allowed only after a genuine semantic candidate survives:
 2. usage evidence;
 3. explicit or inferred target-version / target-stack compatibility;
 4. verification prerequisites;
-5. context minimization.
+5. deterministic-transform discovery;
+6. context minimization.
 
 A long-context benchmark additionally requires task-level evidence that the minimized context is still large. A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and measured quality, latency, throughput, or total cost can plausibly improve.
 
@@ -175,7 +212,7 @@ Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 - benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage; Wave 7D also carries per-repository explicit modernization targets.
 - benchmarks/fetch_corpus.py — fetches exact pinned commits without executing target project code.
 - .github/workflows/benchmark.yml — manual broad benchmark.
-- .github/workflows/semantic-benchmark.yml — manual Wave 7C/7D target-aware benchmark plus model-evaluation-plan artifact.
+- .github/workflows/semantic-benchmark.yml — manual Wave 7C–7E target-aware benchmark, deterministic proposal evidence, and model-evaluation-plan artifact.
 
 Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
@@ -193,8 +230,9 @@ Artifacts are uploaded even when a corpus item fails, preserving diagnostic evid
 
 - distutils.core imports → setuptools
 - simple collections ABC imports or attribute references → collections.abc
+- React 18 target: supported `ReactDOM.render` shapes → `createRoot(...).render(...)`, with root lifetime preserved for supported one-shot and reusable-container patterns
 
-General imp → importlib remains blocked until its semantics can be encoded and verified without guessing. Other migrations escalate only when source, usage, target compatibility, and verification evidence support them.
+General imp → importlib remains blocked until its semantics can be encoded and verified without guessing. Unsupported React root-lifetime shapes are also blocked rather than guessed. Other migrations escalate only when source, usage, target compatibility, deterministic-transform discovery, and verification evidence support them.
 
 ## Safety boundaries
 
@@ -236,10 +274,11 @@ General imp → importlib remains blocked until its semantics can be encoded and
 7B. ✅ Evidence Refinement Gate.
 7C. ✅ Real Legacy Evidence Corpus + Target Compatibility Gate.
 7D. ✅ Explicit Target Profile + Model Evaluation Harness + Context Locality Gate.
-7E. Ordinary-model quality benchmark on the exact Wave 7D tasks before any long-context/B300 experiment.
+7E. ✅ Deterministic Falsification Before Model Inference — 4/4 real React 18 tasks converted to verified deterministic proposals; model benchmark cancelled for this case.
+7F. Find or create a real semantic case that still survives evidence, target, safety, deterministic-transform, and context gates before opening an ordinary-model benchmark.
 
 ## Principle
 
-**Generation is not evidence. Evidence is not authority. Legacy syntax is not a migration requirement. Repository size is not task-context size. Scale is not proof that expensive compute is needed.**
+**Generation is not evidence. Evidence is not authority. Legacy syntax is not a migration requirement. A semantic-looking task is not automatically a model task. Repository size is not task-context size. Scale is not proof that expensive compute is needed.**
 
 Every escalation must earn its added complexity and cost with stronger evidence and measured improvement.

@@ -15,6 +15,7 @@ DEFAULT_DIFF_BUDGET = 80
 SUPPORTED_RECIPES = {
     "python-distutils-to-setuptools",
     "python-collections-abc",
+    "reactdom-render-to-createroot",
 }
 COLLECTION_ABCS = {
     "Mapping",
@@ -115,12 +116,179 @@ def _transform_collections_abc(text: str) -> tuple[str, str | None]:
     return updated, None
 
 
-def _apply_recipe(recipe_id: str, text: str) -> tuple[str, str | None]:
+
+def _find_matching_paren(text: str, open_index: int) -> int | None:
+    paren = 1
+    quote: str | None = None
+    escaped = False
+    i = open_index + 1
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in {"'", '"'} or ord(ch) == 96:
+            quote = ch
+        elif ch == "(":
+            paren += 1
+        elif ch == ")":
+            paren -= 1
+            if paren == 0:
+                return i
+        i += 1
+    return None
+
+
+def _split_top_level_call_args(body: str) -> tuple[str, str] | None:
+    paren = brace = bracket = 0
+    quote: str | None = None
+    escaped = False
+    split_at: int | None = None
+    for i, ch in enumerate(body):
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'} or ord(ch) == 96:
+            quote = ch
+        elif ch == "(":
+            paren += 1
+        elif ch == ")":
+            paren = max(0, paren - 1)
+        elif ch == "{":
+            brace += 1
+        elif ch == "}":
+            brace = max(0, brace - 1)
+        elif ch == "[":
+            bracket += 1
+        elif ch == "]":
+            bracket = max(0, bracket - 1)
+        elif ch == "," and paren == brace == bracket == 0:
+            if split_at is not None:
+                return None
+            split_at = i
+    if split_at is None:
+        return None
+    first = body[:split_at].strip()
+    second = body[split_at + 1:].strip()
+    if not first or not second:
+        return None
+    return first, second
+
+
+def _react_root_name(container: str, text: str) -> str | None:
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", container):
+        return None
+    root_name = f"{container}Root"
+    if re.search(rf"\b{re.escape(root_name)}\b", text):
+        return None
+    return root_name
+
+
+def _insert_reusable_root(text: str, container: str, root_name: str) -> tuple[str, str | None]:
+    declaration = re.search(
+        rf"(?m)^(?P<indent>\s*)(?:const|let)\s+{re.escape(container)}\s*=\s*document\.createElement\([^\n]+\)\s*$",
+        text,
+    )
+    if not declaration:
+        return text, "Named render container is not a supported document.createElement declaration."
+
+    insert_end = declaration.end()
+    following = text[insert_end:]
+    class_assignment = re.match(
+        rf"(?P<newline>\r?\n)(?P<line>\s*{re.escape(container)}\.className\s*=\s*[^\n]+)",
+        following,
+    )
+    if class_assignment:
+        insert_end += class_assignment.end()
+
+    indent = declaration.group("indent")
+    insertion = f"\n{indent}const {root_name} = createRoot({container})"
+    return text[:insert_end] + insertion + text[insert_end:], None
+
+
+def _transform_reactdom_render(text: str, target: str) -> tuple[str, str | None]:
+    import_pattern = re.compile(
+        r"(?m)^(?P<indent>\s*)import\s+ReactDOM\s+from\s+['\"]react-dom['\"]\s*;?\s*$"
+    )
+    import_match = import_pattern.search(text)
+    if not import_match:
+        return text, "Only a default ReactDOM import from react-dom is supported."
+
+    call_token = "ReactDOM.render("
+    call_start = text.find(call_token)
+    if call_start < 0:
+        return text, "No ReactDOM.render call found."
+    if text.find(call_token, call_start + len(call_token)) >= 0:
+        return text, "Multiple ReactDOM.render calls in one target file are blocked."
+
+    open_index = call_start + len("ReactDOM.render")
+    close_index = _find_matching_paren(text, open_index)
+    if close_index is None:
+        return text, "ReactDOM.render call has unbalanced parentheses."
+
+    args = _split_top_level_call_args(text[open_index + 1:close_index])
+    if args is None:
+        return text, "ReactDOM.render arguments are not a supported two-argument shape."
+    element_expr, container_expr = args
+
+    updated = import_pattern.sub(
+        lambda m: f"{m.group('indent')}import {{ createRoot }} from 'react-dom/client'",
+        text,
+        count=1,
+    )
+
+    call_start = updated.find(call_token)
+    open_index = call_start + len("ReactDOM.render")
+    close_index = _find_matching_paren(updated, open_index)
+    if close_index is None:
+        return text, "ReactDOM.render call became unbalanced after import rewrite."
+
+    typescript = Path(target).suffix.lower() in {".ts", ".tsx"}
+    if re.fullmatch(r"document\.getElementById\([^)]*\)", container_expr, flags=re.DOTALL):
+        container = container_expr + ("!" if typescript else "")
+        render_prefix = f"createRoot({container}).render("
+    elif ".appendChild(" in container_expr:
+        render_prefix = f"createRoot({container_expr}).render("
+    else:
+        root_name = _react_root_name(container_expr, updated)
+        if root_name is None:
+            return text, "Render target lifetime is not a supported deterministic pattern."
+        updated, blocked = _insert_reusable_root(updated, container_expr, root_name)
+        if blocked:
+            return text, blocked
+        call_start = updated.find(call_token)
+        open_index = call_start + len("ReactDOM.render")
+        close_index = _find_matching_paren(updated, open_index)
+        if close_index is None:
+            return text, "ReactDOM.render call became unbalanced after reusable-root insertion."
+        render_prefix = f"{root_name}.render("
+
+    replacement = render_prefix + element_expr + ")"
+    updated = updated[:call_start] + replacement + updated[close_index + 1:]
+    if "ReactDOM.render(" in updated:
+        return text, "Legacy ReactDOM.render remains after deterministic transform."
+    return updated, None
+
+
+def _apply_recipe(recipe_id: str, text: str, target: str) -> tuple[str, str | None]:
     if recipe_id == "python-distutils-to-setuptools":
         return _transform_distutils(text)
     if recipe_id == "python-collections-abc":
         return _transform_collections_abc(text)
-    return text, f"Recipe {recipe_id!r} does not yet have a deterministic Wave 5 patch transform."
+    if recipe_id == "reactdom-render-to-createroot":
+        return _transform_reactdom_render(text, target)
+    return text, f"Recipe {recipe_id!r} does not yet have a deterministic patch transform."
 
 
 def validate_proposal_scope(proposal: dict[str, object]) -> tuple[bool, list[str]]:
@@ -207,7 +375,7 @@ def build_patch_proposal(
     except (OSError, UnicodeError) as exc:
         return {**base, "reason": "target-read-failed", "detail": str(exc)}
 
-    after, blocked_reason = _apply_recipe(recipe_id, before)
+    after, blocked_reason = _apply_recipe(recipe_id, before, target)
     if blocked_reason:
         return {**base, "reason": "transform-blocked", "detail": blocked_reason}
 
