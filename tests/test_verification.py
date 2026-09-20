@@ -29,6 +29,32 @@ def _slice_id(root: Path) -> tuple[object, str]:
     return snap, str(item["id"])
 
 
+class DifferentialFindingIdentityTests(unittest.TestCase):
+    def test_large_file_line_count_change_is_not_a_new_finding_when_severity_is_stable(self):
+        from modfactory.models import Finding
+        from modfactory.verification import _finding_key
+
+        before = Finding(
+            category="maintainability", severity="high", path="big.tsx",
+            message="Large source file (1217 lines)", evidence="", remediation="", score=8,
+        )
+        after = Finding(
+            category="maintainability", severity="high", path="big.tsx",
+            message="Large source file (1218 lines)", evidence="", remediation="", score=8,
+        )
+        escalated = Finding(
+            category="maintainability", severity="high", path="big.tsx",
+            message="Large source file (1201 lines)", evidence="", remediation="", score=8,
+        )
+        medium = Finding(
+            category="maintainability", severity="medium", path="big.tsx",
+            message="Large source file (1199 lines)", evidence="", remediation="", score=4,
+        )
+
+        self.assertEqual(_finding_key(before), _finding_key(after))
+        self.assertNotEqual(_finding_key(medium), _finding_key(escalated))
+
+
 class DifferentialVerificationTests(unittest.TestCase):
     def test_static_verification_removes_target_finding_without_touching_original(self):
         with TemporaryDirectory() as td, TemporaryDirectory() as out:
