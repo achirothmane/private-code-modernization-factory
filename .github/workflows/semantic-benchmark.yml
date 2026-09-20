@@ -1,6 +1,13 @@
 name: Wave 7C Real Semantic Benchmark
 
 on:
+  push:
+    branches:
+      - wave7d-explicit-target-profile
+    paths:
+      - ".github/workflows/semantic-benchmark.yml"
+      - "benchmarks/semantic-corpus.json"
+      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
