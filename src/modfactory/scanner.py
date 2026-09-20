@@ -406,7 +406,7 @@ def _javascript_legacy_findings(
 
 def _pom_spring_boot_version(text: str) -> str | None:
     property_match = re.search(
-        r"<spring-boot\\.version>\\s*([^<]+?)\\s*</spring-boot\\.version>",
+        r"<spring-boot\.version>\s*([^<]+?)\s*</spring-boot\.version>",
         text,
         flags=re.IGNORECASE,
     )
@@ -414,8 +414,8 @@ def _pom_spring_boot_version(text: str) -> str | None:
         return property_match.group(1).strip()
 
     parent_match = re.search(
-        r"<parent>.*?<artifactId>\\s*spring-boot-starter-parent\\s*</artifactId>.*?"
-        r"<version>\\s*([^<]+?)\\s*</version>.*?</parent>",
+        r"<parent>.*?<artifactId>\s*spring-boot-starter-parent\s*</artifactId>.*?"
+        r"<version>\s*([^<]+?)\s*</version>.*?</parent>",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -423,8 +423,8 @@ def _pom_spring_boot_version(text: str) -> str | None:
         return parent_match.group(1).strip()
 
     bom_match = re.search(
-        r"<dependency>.*?<artifactId>\\s*spring-boot-dependencies\\s*</artifactId>.*?"
-        r"<version>\\s*([^<]+?)\\s*</version>.*?</dependency>",
+        r"<dependency>.*?<artifactId>\s*spring-boot-dependencies\s*</artifactId>.*?"
+        r"<version>\s*([^<]+?)\s*</version>.*?</dependency>",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
