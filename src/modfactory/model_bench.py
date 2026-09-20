@@ -30,6 +30,115 @@ class ModelProviderAdapter(Protocol):
         ...
 
 
+class OpenAICompatibleAdapter:
+    def __init__(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        model: str,
+        timeout_seconds: int = 600,
+        max_tokens: int = 8192,
+        bearer_token: str | None = None,
+    ) -> None:
+        provider = provider.strip()
+        endpoint = endpoint.strip()
+        model = model.strip()
+        if not provider:
+            raise ValueError("provider must be non-empty")
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError("endpoint must be an http(s) URL")
+        if not model:
+            raise ValueError("model must be non-empty")
+        if timeout_seconds < 1 or max_tokens < 1:
+            raise ValueError("timeout_seconds and max_tokens must be >= 1")
+        self.provider = provider
+        self.endpoint = endpoint
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self.max_tokens = max_tokens
+        self.bearer_token = bearer_token.strip() if isinstance(bearer_token, str) and bearer_token.strip() else None
+
+    @staticmethod
+    def _decode_content(content: object) -> dict[str, object]:
+        return GitHubModelsAdapter._decode_content(content)
+
+    def invoke(self, request: dict[str, object]) -> dict[str, object]:
+        messages = request.get("messages")
+        if not isinstance(messages, list):
+            raise ValueError("Model request messages must be a list")
+
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": self.max_tokens,
+        }
+        raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "modfactory-wave7h",
+        }
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        http_request = urllib.request.Request(
+            self.endpoint,
+            data=raw,
+            method="POST",
+            headers=headers,
+        )
+
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[-4000:]
+            raise ValueError(f"OpenAI-compatible endpoint HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise ValueError(f"OpenAI-compatible endpoint failed: {exc.reason}") from exc
+
+        try:
+            payload = json.loads(response_body)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"OpenAI-compatible endpoint returned invalid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("OpenAI-compatible response envelope must be an object")
+
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("OpenAI-compatible response has no completion choice")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ValueError("OpenAI-compatible response choice has no message")
+        parsed = self._decode_content(message.get("content"))
+        unified_diff = parsed.get("unified_diff")
+        rationale = parsed.get("rationale")
+        if not isinstance(unified_diff, str) or not isinstance(rationale, str):
+            raise ValueError("Structured content must contain unified_diff and rationale strings")
+
+        usage_payload = payload.get("usage")
+        usage: dict[str, object] = {}
+        if isinstance(usage_payload, dict):
+            usage = {
+                "input_tokens": usage_payload.get("prompt_tokens"),
+                "output_tokens": usage_payload.get("completion_tokens"),
+            }
+
+        return {
+            "provider_request_id": payload.get("id"),
+            "provider_model_returned": payload.get("model"),
+            "unified_diff": unified_diff,
+            "rationale": rationale,
+            "usage": usage,
+            "cost_usd": None,
+            "provider_metadata": {
+                "created": payload.get("created"),
+                "system_fingerprint": payload.get("system_fingerprint"),
+            },
+        }
+
+
 class GitHubModelsAdapter:
     provider = "github-models"
     endpoint = "https://models.github.ai/inference/chat/completions"
@@ -206,6 +315,7 @@ def run_model_request(
             "output_tokens": "provider" if output_tokens is not None else None,
             "cost_usd": "provider" if cost_usd is not None else None,
         },
+        "provider_metadata": result.get("provider_metadata"),
     }
 
 
