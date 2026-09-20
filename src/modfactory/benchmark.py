@@ -53,18 +53,21 @@ def classify_escalation(metrics: dict[str, object]) -> dict[str, object]:
     if compatibility == 0 and architecture == 0:
         tier = "NO_MODERNIZATION_SIGNAL"
         reason = "No compatibility or architecture migration slice was detected."
+    elif compatibility == 0 and semantic == 0 and architecture > 0:
+        tier = "ARCHITECTURE_REVIEW"
+        reason = "Architecture pressure exists, but there is no semantic migration signal that justifies model escalation."
     elif semantic == 0 and architecture == 0 and proposed > 0:
         tier = "DETERMINISTIC"
         reason = "Detected compatibility work is covered by deterministic transforms."
     elif safety > 0 and semantic == 0 and proposed == 0:
         tier = "SAFETY_FIRST"
         reason = "Verification prerequisites are missing; add baseline tests/CI before adding model intelligence."
-    elif band == "large" and (semantic > 0 or architecture > 0):
+    elif band == "large" and semantic > 0:
         tier = "LONG_CONTEXT_EVALUATION_CANDIDATE"
-        reason = "Large repository plus semantic/architecture work may justify a long-context model evaluation."
+        reason = "Large repository plus genuine semantic migration work may justify a long-context model evaluation."
     else:
         tier = "SEMANTIC_REVIEW_CANDIDATE"
-        reason = "Some migration work is semantic or architectural and is not safely covered by deterministic transforms."
+        reason = "Some migration work is semantic and is not safely covered by deterministic transforms."
 
     return {
         "tier": tier,
@@ -322,7 +325,7 @@ def render_benchmark_markdown(result: dict[str, object]) -> str:
         "",
         "## Interpretation boundary",
         "",
-        "LONG_CONTEXT_EVALUATION_CANDIDATE means only that repository scale and non-deterministic migration work coexist. It is not proof that an LLM improves correctness, and it is not a B300 purchase/rental recommendation.",
+        "LONG_CONTEXT_EVALUATION_CANDIDATE requires both large repository scale and a genuine semantic escalation. Architecture pressure alone never triggers it. It is not proof that an LLM improves correctness, and it is not a B300 purchase/rental recommendation.",
         "",
     ])
     return "\n".join(lines)
