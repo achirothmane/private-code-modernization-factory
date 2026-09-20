@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import json
 import os
 import re
 from collections import Counter
@@ -32,15 +34,52 @@ MANIFESTS = {
     "Gemfile", "composer.json", "*.csproj",
 }
 
-LEGACY_PATTERNS = [
-    (re.compile(r"\bimport\s+imp\b|\bfrom\s+imp\s+import\b"), "Python imp module is removed in Python 3.12+", "Replace imp with importlib.", 12),
-    (re.compile(r"\bfrom\s+distutils\b|\bimport\s+distutils\b"), "distutils is removed from modern Python", "Move packaging/build logic to setuptools or another maintained build backend.", 10),
-    (re.compile(r"collections\.(MutableMapping|MutableSequence|Mapping|Sequence)|from\s+collections\s+import\s+[^\n]*(MutableMapping|MutableSequence|Mapping|Sequence)"), "Legacy collections ABC import pattern", "Use collections.abc equivalents.", 8),
-    (re.compile(r"\bnode-sass\b"), "node-sass is deprecated", "Migrate to Dart Sass (sass package).", 10),
-    (re.compile(r"[\"']request[\"']\s*:\s*[\"']"), "request npm package is deprecated", "Replace request with fetch, undici, axios, or another maintained HTTP client.", 8),
-    (re.compile(r"ReactDOM\.render\s*\("), "Legacy React render API detected", "Migrate to createRoot before adopting newer React behavior.", 7),
-    (re.compile(r"javax\."), "Javax namespace detected", "Assess Jakarta namespace migration if upgrading to newer enterprise Java stacks.", 5),
-]
+COLLECTION_ABCS = {
+    "Mapping",
+    "MutableMapping",
+    "Sequence",
+    "MutableSequence",
+}
+
+NPM_DEPENDENCY_SECTIONS = (
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+)
+
+# Intentionally narrow. "javax.*" is not equivalent to "Jakarta migration needed".
+# Java SE namespaces such as javax.tools, javax.naming, javax.sql, javax.net,
+# javax.security and JCache's javax.cache must not be escalated automatically.
+JAKARTA_MIGRATION_PREFIXES = (
+    "javax.activation.",
+    "javax.annotation.security.",
+    "javax.batch.",
+    "javax.decorator.",
+    "javax.ejb.",
+    "javax.el.",
+    "javax.enterprise.",
+    "javax.faces.",
+    "javax.inject.",
+    "javax.interceptor.",
+    "javax.jms.",
+    "javax.json.",
+    "javax.mail.",
+    "javax.persistence.",
+    "javax.resource.",
+    "javax.security.enterprise.",
+    "javax.servlet.",
+    "javax.transaction.",
+    "javax.validation.",
+    "javax.websocket.",
+    "javax.ws.rs.",
+    "javax.xml.bind.",
+    "javax.xml.soap.",
+    "javax.xml.ws.",
+)
+
+REACTDOM_RENDER_PATTERN = re.compile(r"\bReactDOM\.render\s*\(")
+JAVA_IMPORT_PATTERN = re.compile(r"(?m)^\s*import\s+(javax\.[A-Za-z0-9_$.]+)\s*;")
 
 
 def _is_manifest(path: Path) -> bool:
@@ -66,6 +105,196 @@ def _read_text(path: Path, max_bytes: int = 1_500_000) -> str | None:
         return path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None
+
+
+def _finding(
+    *,
+    path: str,
+    message: str,
+    evidence: str,
+    remediation: str,
+    score: int,
+) -> Finding:
+    return Finding(
+        category="legacy-api",
+        severity="high" if score >= 10 else "medium",
+        path=path,
+        message=message,
+        evidence=evidence,
+        remediation=remediation,
+        score=score,
+    )
+
+
+def _python_legacy_findings(rel: str, text: str) -> list[Finding]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+
+    detected: dict[str, tuple[str, str, int]] = {}
+
+    def remember(message: str, evidence: str, remediation: str, score: int) -> None:
+        detected.setdefault(message, (evidence, remediation, score))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = alias.name
+                if name == "imp":
+                    remember(
+                        "Python imp module is removed in Python 3.12+",
+                        f"Python import at line {node.lineno}: import {name}",
+                        "Replace imp with importlib.",
+                        12,
+                    )
+                if name == "distutils" or name.startswith("distutils."):
+                    remember(
+                        "distutils is removed from modern Python",
+                        f"Python import at line {node.lineno}: import {name}",
+                        "Move packaging/build logic to setuptools or another maintained build backend.",
+                        10,
+                    )
+
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "imp":
+                remember(
+                    "Python imp module is removed in Python 3.12+",
+                    f"Python import at line {node.lineno}: from imp import ...",
+                    "Replace imp with importlib.",
+                    12,
+                )
+            if module == "distutils" or module.startswith("distutils."):
+                remember(
+                    "distutils is removed from modern Python",
+                    f"Python import at line {node.lineno}: from {module} import ...",
+                    "Move packaging/build logic to setuptools or another maintained build backend.",
+                    10,
+                )
+            if module == "collections":
+                names = {alias.name for alias in node.names}
+                legacy = sorted(names & COLLECTION_ABCS)
+                if legacy:
+                    remember(
+                        "Legacy collections ABC import pattern",
+                        f"Python import at line {node.lineno}: collections -> {', '.join(legacy)}",
+                        "Use collections.abc equivalents.",
+                        8,
+                    )
+
+        elif isinstance(node, ast.Attribute):
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id == "collections"
+                and node.attr in COLLECTION_ABCS
+            ):
+                remember(
+                    "Legacy collections ABC import pattern",
+                    f"Python attribute at line {node.lineno}: collections.{node.attr}",
+                    "Use collections.abc equivalents.",
+                    8,
+                )
+
+    return [
+        _finding(
+            path=rel,
+            message=message,
+            evidence=evidence,
+            remediation=remediation,
+            score=score,
+        )
+        for message, (evidence, remediation, score) in detected.items()
+    ]
+
+
+def _npm_manifest_findings(path: Path, rel: str, text: str) -> list[Finding]:
+    if path.name != "package.json":
+        return []
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    direct: dict[str, tuple[str, str]] = {}
+    for section in NPM_DEPENDENCY_SECTIONS:
+        deps = payload.get(section)
+        if not isinstance(deps, dict):
+            continue
+        for package in ("node-sass", "request"):
+            version = deps.get(package)
+            if isinstance(version, str):
+                direct.setdefault(package, (section, version))
+
+    findings: list[Finding] = []
+    if "node-sass" in direct:
+        section, version = direct["node-sass"]
+        findings.append(_finding(
+            path=rel,
+            message="node-sass is deprecated",
+            evidence=f"Direct npm dependency: {section}.node-sass={version}",
+            remediation="Migrate to Dart Sass (sass package).",
+            score=10,
+        ))
+    if "request" in direct:
+        section, version = direct["request"]
+        findings.append(_finding(
+            path=rel,
+            message="request npm package is deprecated",
+            evidence=f"Direct npm dependency: {section}.request={version}",
+            remediation="Replace request with fetch, undici, axios, or another maintained HTTP client.",
+            score=8,
+        ))
+    return findings
+
+
+def _javascript_legacy_findings(rel: str, text: str) -> list[Finding]:
+    match = REACTDOM_RENDER_PATTERN.search(text)
+    if not match:
+        return []
+    line = text.count("\n", 0, match.start()) + 1
+    return [_finding(
+        path=rel,
+        message="Legacy React render API detected",
+        evidence=f"JavaScript call at line {line}: ReactDOM.render(...)",
+        remediation="Migrate to createRoot before adopting newer React behavior.",
+        score=7,
+    )]
+
+
+def _java_legacy_findings(rel: str, text: str) -> list[Finding]:
+    for match in JAVA_IMPORT_PATTERN.finditer(text):
+        imported = match.group(1)
+        if any(imported.startswith(prefix) for prefix in JAKARTA_MIGRATION_PREFIXES):
+            line = text.count("\n", 0, match.start()) + 1
+            return [_finding(
+                path=rel,
+                message="Javax namespace detected",
+                evidence=f"Jakarta-candidate import at line {line}: {imported}",
+                remediation="Assess Jakarta namespace migration if upgrading to newer enterprise Java stacks.",
+                score=5,
+            )]
+    return []
+
+
+def _legacy_findings_for_file(path: Path, rel: str, lang: str | None, text: str) -> list[Finding]:
+    findings: list[Finding] = []
+
+    if lang == "Python":
+        findings.extend(_python_legacy_findings(rel, text))
+
+    if path.name == "package.json":
+        findings.extend(_npm_manifest_findings(path, rel, text))
+
+    if lang in {"JavaScript", "TypeScript"}:
+        findings.extend(_javascript_legacy_findings(rel, text))
+
+    if lang == "Java":
+        findings.extend(_java_legacy_findings(rel, text))
+
+    return findings
 
 
 def scan_repository(root: str | Path) -> RepoSnapshot:
@@ -125,15 +354,7 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
                     score=4,
                 ))
 
-            for pattern, message, remediation, score in LEGACY_PATTERNS:
-                match = pattern.search(text)
-                if match:
-                    findings.append(Finding(
-                        category="legacy-api", severity="high" if score >= 10 else "medium",
-                        path=rel, message=message,
-                        evidence=f"Matched: {match.group(0)[:120]}",
-                        remediation=remediation, score=score,
-                    ))
+            findings.extend(_legacy_findings_for_file(path, rel, lang, text))
 
     if source_files and not test_files:
         findings.append(Finding(
