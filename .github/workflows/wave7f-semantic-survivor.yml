@@ -1,14 +1,6 @@
 name: Wave 7F Real Semantic Survivor
 
 on:
-  push:
-    branches:
-      - wave7f-real-semantic-survivor
-    paths:
-      - ".github/workflows/wave7f-semantic-survivor.yml"
-      - "benchmarks/wave7f-corpus.json"
-      - "benchmarks/fetch_corpus.py"
-      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
