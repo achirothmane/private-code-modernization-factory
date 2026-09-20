@@ -67,6 +67,19 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(result["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
             self.assertFalse(result["escalation"]["b300_rental_recommended"])
 
+    def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
+        result = classify_escalation({
+            "patch_proposals": 0,
+            "semantic_escalations": 0,
+            "safety_blockers": 0,
+            "architecture_slices": 40,
+            "compatibility_slices": 0,
+            "workload_band": "large",
+        })
+        self.assertEqual(result["tier"], "ARCHITECTURE_REVIEW")
+        self.assertEqual(result["b300_gate"], "NOT_APPLICABLE")
+        self.assertFalse(result["b300_rental_recommended"])
+
     def test_large_semantic_pressure_only_marks_long_context_evaluation_candidate(self):
         result = classify_escalation({
             "patch_proposals": 0,
