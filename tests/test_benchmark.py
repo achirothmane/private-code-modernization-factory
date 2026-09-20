@@ -67,6 +67,40 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(result["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
             self.assertFalse(result["escalation"]["b300_rental_recommended"])
 
+    def test_manifest_target_turns_react17_into_explicit_react18_migration(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "index.js").write_text(
+                "import ReactDOM from 'react-dom';\nReactDOM.render(<App />, document.getElementById('root'));\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "index.test.js").write_text("module.exports = true\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"test": "node src/index.test.js"},
+                    "dependencies": {"react": "^17.0.2", "react-dom": "^17.0.2"},
+                }),
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n      - run: npm test\n",
+                encoding="utf-8",
+            )
+
+            no_target = benchmark_repository(root, name="react17")
+            self.assertEqual(no_target["semantic_escalations"], 0)
+
+            targeted = benchmark_repository(
+                root,
+                name="react18-target",
+                targets={"react-dom": "18"},
+            )
+            self.assertGreaterEqual(targeted["semantic_escalations"], 1)
+            self.assertEqual(targeted["target_profile"], {"react-dom": "18"})
+            self.assertEqual(targeted["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
+
     def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
         result = classify_escalation({
             "patch_proposals": 0,
