@@ -79,7 +79,7 @@ def classify_escalation(metrics: dict[str, object]) -> dict[str, object]:
             else "NOT_APPLICABLE"
         ),
         "note": (
-            "Wave 7A measures repository pressure only. Repository size alone is not evidence "
+            "Current corpus evidence measures repository pressure only. Repository size alone is not evidence "
             "that B300 is economically or technically required."
         ),
     }
@@ -268,7 +268,7 @@ def benchmark_corpus(
             "escalation_tiers": dict(sorted(tiers.items())),
             "blocked_reasons": dict(sorted(blocked_reasons.items())),
             "b300_rental_recommended": False,
-            "b300_decision": "NOT_JUSTIFIED_BY_WAVE_7A",
+            "b300_decision": "NOT_JUSTIFIED_BY_CURRENT_EVIDENCE",
         },
         "thresholds": {
             "long_context": LONG_CONTEXT_THRESHOLDS,
@@ -300,7 +300,7 @@ def render_benchmark_markdown(result: dict[str, object]) -> str:
         f"B300 rental recommended: {agg['b300_rental_recommended']}",
         f"Decision: {agg['b300_decision']}",
         "",
-        "Wave 7A does not infer GPU need from repository size. A long-context candidate must next be benchmarked on model quality, latency, throughput, and total cost before renting B300-class hardware.",
+        "The current evidence does not infer GPU need from repository size. A genuine long-context semantic candidate must first be benchmarked on model quality, latency, throughput, and total cost before renting B300-class hardware.",
         "",
         "## Repositories",
         "",
