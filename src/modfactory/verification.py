@@ -19,11 +19,19 @@ UNSAFE_COMMAND_TOKENS = ("|", ";", "&", ">", "<", "\x60", "$(", "\n", "\r")
 
 
 def _finding_key(item: object) -> tuple[str, str, str]:
-    return (
-        str(getattr(item, "category", "")),
-        str(getattr(item, "path", "")),
-        str(getattr(item, "message", "")),
-    )
+    category = str(getattr(item, "category", ""))
+    path = str(getattr(item, "path", ""))
+    message = str(getattr(item, "message", ""))
+    severity = str(getattr(item, "severity", ""))
+
+    # Line counts are evidence, not finding identity. A one-line safe patch in an
+    # already-large file must not look like a brand-new regression merely because
+    # the numeric count embedded in the message changed. Severity changes remain
+    # visible (for example medium -> high).
+    if category == "maintainability" and message.startswith("Large source file ("):
+        message = f"Large source file [{severity}]"
+
+    return (category, path, message)
 
 
 def _copy_repository(source: Path, destination: Path) -> None:
