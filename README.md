@@ -326,9 +326,12 @@ Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 
 - benchmarks/corpus.json — broad 10-repository Wave 7A/7B corpus.
 - benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage; Wave 7D also carries per-repository explicit modernization targets.
+- benchmarks/wave7f-corpus.json — isolated pinned semantic-survivor corpus for Auth0 node-wsfed.
 - benchmarks/fetch_corpus.py — fetches exact pinned commits without executing target project code.
 - .github/workflows/benchmark.yml — manual broad benchmark.
 - .github/workflows/semantic-benchmark.yml — manual Wave 7C–7E target-aware benchmark, deterministic proposal evidence, and model-evaluation-plan artifact.
+- .github/workflows/wave7f-semantic-survivor.yml — manual first-survivor benchmark.
+- .github/workflows/wave7g-runner-contract.yml — manual provider-neutral request-contract validation.
 
 Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
