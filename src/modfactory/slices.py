@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from .models import RepoSnapshot
+from .recipes import recipe_for_finding
 
 
 def _slice_id(kind: str, path: str, message: str) -> str:
@@ -41,6 +42,8 @@ def build_migration_slices(snapshot: RepoSnapshot) -> list[dict[str, object]]:
     for finding in snapshot.findings:
         if finding.category != "legacy-api":
             continue
+        recipe = recipe_for_finding(finding)
+        recipe_payload = recipe.to_dict() if recipe else None
         slices.append({
             "id": _slice_id("compatibility", finding.path, finding.message),
             "kind": "compatibility",
@@ -49,9 +52,11 @@ def build_migration_slices(snapshot: RepoSnapshot) -> list[dict[str, object]]:
             "title": finding.message,
             "evidence": finding.evidence,
             "objective": finding.remediation,
-            "preconditions": ["Relevant baseline tests are green", "CI baseline is green"],
+            "recipe": recipe_payload,
+            "preconditions": list(recipe.preconditions) if recipe else ["Relevant baseline tests are green", "CI baseline is green"],
             "allowed_changes": [finding.path, "directly related tests"],
-            "verification": ["baseline tests remain green", "obsolete pattern no longer detected", "no unrelated file changes"],
+            "verification": list(recipe.verification) if recipe else ["baseline tests remain green", "obsolete pattern no longer detected", "no unrelated file changes"],
+            "rollback_triggers": list(recipe.rollback_triggers) if recipe else ["Any baseline regression"],
             "merge_gate": "evidence+human-review",
         })
 
