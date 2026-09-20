@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "note": "Pinned public repositories selected because source code contains real legacy API usage that survives Wave 7B evidence refinement. Static-only; target project code is not executed.",
+  "note": "Pinned public repositories selected for real source-level legacy API usage. Wave 7C then applies usage and target-compatibility gates to determine whether the legacy evidence is actually actionable. Static-only; target project code is not executed.",
   "repositories": [
     {
       "name": "h2oai-wave-reactdom",
       "repo": "h2oai/wave",
       "commit": "fff04af6d92584d75ce7e946d2c449230461dfcb",
       "path": "h2oai-wave-reactdom",
-      "evidence": "ui/src/index.tsx uses ReactDOM.render(<Router ...>)"
+      "evidence": "ui and ide source contain ReactDOM.render; package context declares react-dom 17/16, so the final target-compatibility gate suppresses migration escalation"
     },
     {
       "name": "stackstorm-st2web-reactdom",
       "repo": "StackStorm/st2web",
       "commit": "4925b85852b78ad8db71e4e5e4bf913b230565f4",
       "path": "stackstorm-st2web-reactdom",
-      "evidence": "main.js uses ReactDOM.render(<Provider ...>)"
+      "evidence": "main.js contains ReactDOM.render; target context determines whether a React 18+ migration is actionable"
     },
     {
       "name": "devices-css-node-sass",

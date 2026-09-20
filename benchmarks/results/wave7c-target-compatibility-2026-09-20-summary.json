@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "wave": "7C",
+  "title": "Real Legacy Evidence + Target Compatibility Gate",
+  "initial_run": {
+    "workflow_run_id": 35483525970,
+    "repositories_analyzed": 5,
+    "source_files": 1040,
+    "lines": 980491,
+    "compatibility_slices": 10,
+    "semantic_escalations": 4,
+    "safety_blockers": 6,
+    "architecture_slices": 45,
+    "long_context_candidates": 1
+  },
+  "final_run": {
+    "workflow_run_id": 35483643657,
+    "artifact_id": 10596676457,
+    "repositories_requested": 5,
+    "repositories_analyzed": 5,
+    "errors": 0,
+    "source_files": 1040,
+    "lines": 980491,
+    "findings": 34,
+    "compatibility_slices": 3,
+    "patch_proposals": 0,
+    "semantic_escalations": 0,
+    "safety_blockers": 3,
+    "architecture_slices": 45,
+    "long_context_candidates": 0
+  },
+  "semantic_progression": [
+    4,
+    0
+  ],
+  "target_context": {
+    "h2oai/wave ui react-dom": "^17.0.2",
+    "h2oai/wave ide react-dom": "^16.13.1",
+    "rule": "ReactDOM.render is only escalated when nearest package.json declares react-dom major >= 18."
+  },
+  "remaining_cases": [
+    {
+      "repo": "picturepan2/devices.css",
+      "signal": "node-sass",
+      "blocker": "baseline-tests-missing"
+    },
+    {
+      "repo": "sbstjn/timesheet.js",
+      "signal": "node-sass",
+      "blocker": "baseline-ci-missing"
+    },
+    {
+      "repo": "prezi/changelog",
+      "signal": "imp",
+      "blocker": "baseline-tests-missing"
+    }
+  ],
+  "compute": {
+    "model_benchmark_justified": false,
+    "b300_benchmark_justified": false,
+    "b300_rental_recommended": false,
+    "decision": "NOT_JUSTIFIED_BY_CURRENT_EVIDENCE"
+  },
+  "conclusion": "No genuine semantic candidate survives source, usage, target-compatibility, and verification gates."
+}
