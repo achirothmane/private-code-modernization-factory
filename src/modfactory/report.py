@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .models import RepoSnapshot
 from .planner import build_plan
+from .recipes import build_recipe_instances
 from .slices import build_migration_slices
 
 
@@ -12,6 +13,7 @@ def build_payload(snapshot: RepoSnapshot) -> dict[str, object]:
     return {
         "snapshot": snapshot.to_dict(),
         "plan": build_plan(snapshot),
+        "migration_recipes": build_recipe_instances(snapshot.findings),
         "migration_slices": build_migration_slices(snapshot),
         "gate": {
             "status": "BLOCK" if snapshot.risk_score >= 45 else "REVIEW" if snapshot.risk_score >= 20 else "PASS",
@@ -42,6 +44,7 @@ def render_markdown(payload: dict[str, object]) -> str:
         f"- Architecture edges: {snap.get('architecture', {}).get('edge_count', 0)}",
         f"- Dependency cycles: {len(snap.get('architecture', {}).get('cycles', []))}",
         f"- Dependency hubs: {len(snap.get('architecture', {}).get('hubs', []))}",
+        f"- Migration recipes: {len(payload.get('migration_recipes', []))}",
         "",
         "## Findings",
         "",
@@ -59,6 +62,30 @@ def render_markdown(payload: dict[str, object]) -> str:
                 f"- Risk points: {f['score']}",
                 "",
             ])
+
+    lines.extend(["## Migration recipes", ""])
+    recipes = payload.get("migration_recipes", [])
+    if not recipes:
+        lines.append("No deterministic recipe matched the current findings.")
+        lines.append("")
+    else:
+        for recipe in recipes:
+            lines.extend([
+                f"### `{recipe['id']}` — {recipe['title']}",
+                f"- Target: `{recipe['target']}`",
+                f"- Confidence: {recipe['confidence']}",
+                f"- Strategy: {recipe['strategy']}",
+                "- Preconditions:",
+                *[f"  - {v}" for v in recipe["preconditions"]],
+                "- Transform:",
+                *[f"  - {v}" for v in recipe["transforms"]],
+                "- Verification:",
+                *[f"  - {v}" for v in recipe["verification"]],
+                "- Rollback if:",
+                *[f"  - {v}" for v in recipe["rollback_triggers"]],
+                "",
+            ])
+
     lines.extend(["## Migration plan", ""])
     for step in payload["plan"]:
         lines.extend([
