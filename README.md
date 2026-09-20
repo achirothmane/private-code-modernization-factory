@@ -1,12 +1,12 @@
 # Private Code Modernization Factory — MVP
 
-Evidence-first repository modernization analysis, constrained patch proposal generation, differential before/after verification, and scale/escalation measurement.
+Evidence-first repository modernization analysis, constrained patch proposal generation, differential before/after verification, and escalation control.
 
-The tool does not grant an AI authority to rewrite, merge, or deploy a repository blindly. It measures where deterministic automation works, where verification prerequisites are missing, and where semantic or long-context evaluation may be justified.
+The tool does not grant an AI authority to rewrite, merge, or deploy a repository blindly. It first strengthens the evidence itself, then decides whether deterministic automation, safety work, human review, or model evaluation is justified.
 
 ## Core pipeline
 
-repo → snapshot → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → scale/escalation benchmark → human review
+repo → snapshot → evidence refinement → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → scale/escalation benchmark → human review
 
 ## Commands
 
@@ -53,35 +53,68 @@ modfactory benchmark /path/to/corpus \
 
 ## Wave 7A: Scale & Escalation Benchmark
 
-Wave 7A measures repository size, analysis time, findings, recipes, migration slices, deterministic proposal coverage, blocked reasons, safety blockers, semantic escalations, architecture pressure, and long-context evaluation candidates.
+The first reproducible corpus run on 2026-09-20 analyzed 10 pinned public repositories, 6,326 source files, and 2,195,930 lines. It initially reported 17 compatibility slices and 12 semantic escalations.
 
-The workload bands are screening heuristics, not hardware requirements. LONG_CONTEXT_EVALUATION_CANDIDATE requires both large repository scale and a genuine semantic escalation; architecture pressure alone does not trigger model escalation.
+That result did not justify a B300 rental, but Wave 7B showed an even more important fact: many of those semantic signals were not genuine migration workloads.
 
-The reproducible 2026-09-20 corpus run analyzed 10/10 pinned public repositories: 6,326 source files and 2,195,930 lines. It found 17 compatibility slices, 12 semantic escalations, 5 safety blockers, 136 architecture slices, and 0 LONG_CONTEXT_EVALUATION_CANDIDATE cases. B300 rental is therefore not justified by the current Wave 7A evidence. The exact report is stored under benchmarks/results/.
+## Wave 7B: Evidence Refinement Gate
 
-A B300-class rental can only be considered after a separate model benchmark measures quality, latency, throughput, and total cost against smaller hardware or cloud alternatives.
+Wave 7B refines evidence before any model call:
+
+- Python legacy APIs are detected from AST imports/attributes instead of free-text matches.
+- Documentation and comments mentioning distutils or imp do not become migration findings.
+- npm deprecation findings come from direct package.json dependencies, not lockfile duplicates.
+- Deprecated npm packages require observed import, require, dynamic import, or package-script usage before becoming semantic migration candidates.
+- A direct deprecated dependency with no observed usage becomes dependency-hygiene work: verify removal, regenerate the lockfile, and run the baseline.
+- javax detection is restricted to actual Java imports from known Jakarta-migration namespaces.
+- Java SE namespaces, JCache, XML/config strings, documentation, and system-property text do not trigger Jakarta migration automatically.
+
+The final Wave 7B run on the same exact 10-repository corpus produced:
+
+- repositories analyzed: 10 / 10
+- source files: 6,326
+- lines: 2,195,930
+- findings: 486
+- compatibility slices: 3
+- semantic escalations: 0
+- safety blockers: 3
+- architecture slices: 136
+- LONG_CONTEXT_EVALUATION_CANDIDATE: 0
+- B300 rental recommended: false
+
+The semantic count therefore moved from 12 → 1 → 0 as evidence quality improved.
+
+No model/compute benchmark is justified for this corpus because no genuine semantic candidate survives the Evidence Refinement Gate. Model evaluation is deferred until a future corpus produces a real semantic candidate that deterministic evidence cannot resolve.
+
+## Compute gate
+
+Repository size alone never justifies expensive compute.
+
+A model benchmark is allowed only after a genuine semantic candidate survives evidence refinement. A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and the remaining workload is large enough that measured quality, latency, throughput, or total cost could improve materially.
+
+Current decision: NOT_JUSTIFIED_BY_CURRENT_EVIDENCE.
 
 ## Reproducible public corpus
 
-benchmarks/corpus.json pins 10 public repositories to exact commit SHAs across Python, JavaScript, and Java, from very small legacy codebases to large actively maintained projects.
+benchmarks/corpus.json pins 10 public repositories to exact commit SHAs across Python, JavaScript, and Java.
 
-benchmarks/fetch_corpus.py fetches those exact commits without running project code. The manual GitHub Actions workflow .github/workflows/benchmark.yml fetches the corpus, runs only static ModFactory logic, and uploads benchmark.json plus benchmark.md.
+benchmarks/fetch_corpus.py fetches those commits without running project code. The manual GitHub Actions workflow .github/workflows/benchmark.yml runs static ModFactory logic and uploads benchmark evidence even when a corpus item fails, so partial failures remain diagnosable.
 
 ## Escalation tiers
 
 - NO_MODERNIZATION_SIGNAL — no compatibility or architecture migration slice detected.
 - ARCHITECTURE_REVIEW — architecture pressure exists, but no semantic migration signal justifies model escalation.
 - DETERMINISTIC — detected compatibility work is covered by deterministic transforms.
-- SAFETY_FIRST — tests, CI, or test-command evidence must be repaired before adding model intelligence.
-- SEMANTIC_REVIEW_CANDIDATE — migration semantics exceed deterministic transforms.
-- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work; this only authorizes a model benchmark, not expensive compute rental.
+- SAFETY_FIRST — tests, CI, or test-command evidence must be repaired before model intelligence.
+- SEMANTIC_REVIEW_CANDIDATE — a genuine semantic migration exceeds deterministic transforms.
+- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work; this authorizes only a model benchmark, never automatic B300 rental.
 
 ## Current deterministic transforms
 
 - distutils.core imports → setuptools
 - simple collections ABC imports or attribute references → collections.abc
 
-General imp → importlib, node-sass → sass, HTTP-client replacement, React root migration, and Jakarta migration remain blocked or review-only until their semantics can be encoded and verified without guessing.
+General imp → importlib remains blocked until its semantics can be encoded and verified without guessing. Other migrations are escalated only when source-level evidence proves the relevant API/dependency is actually used.
 
 ## Safety boundaries
 
@@ -94,7 +127,7 @@ General imp → importlib, node-sass → sass, HTTP-client replacement, React ro
 
 ## Architecture
 
-- scanner.py — repository inventory and modernization evidence.
+- scanner.py — evidence-refined repository inventory and modernization signals.
 - history.py — churn and ownership evidence.
 - architecture.py — dependency graph, cycles, hubs, upgrade boundaries.
 - commands.py — evidence-backed command discovery.
@@ -118,10 +151,11 @@ General imp → importlib, node-sass → sass, HTTP-client replacement, React ro
 5. ✅ Constrained one-slice Patch Proposal Engine.
 6. ✅ Differential Verification Engine.
 7A. ✅ Scale & Escalation Benchmark.
-7B. Model/compute benchmark only for semantic cases that survive 7A; start with ordinary/smaller model configurations before considering B300-class compute.
+7B. ✅ Evidence Refinement Gate.
+7C. Model/compute benchmark only when a genuine semantic candidate survives 7B.
 
 ## Principle
 
 **Generation is not evidence. Evidence is not authority. Scale is not proof that expensive compute is needed.**
 
-Every escalation must earn its added complexity and cost with measured improvement.
+Every escalation must earn its added complexity and cost with stronger evidence and measured improvement.

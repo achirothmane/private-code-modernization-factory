@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "wave": "7B",
+  "workflow_run_id": 35482650960,
+  "artifact_id": 10595979815,
+  "corpus": {
+    "repositories_requested": 10,
+    "repositories_analyzed": 10,
+    "errors": 0,
+    "source_files": 6326,
+    "lines": 2195930
+  },
+  "before_wave7a": {
+    "findings": 499,
+    "compatibility_slices": 17,
+    "semantic_escalations": 12,
+    "safety_blockers": 5,
+    "architecture_slices": 136,
+    "long_context_candidates": 0
+  },
+  "after_wave7b": {
+    "findings": 486,
+    "compatibility_slices": 3,
+    "semantic_escalations": 0,
+    "safety_blockers": 3,
+    "architecture_slices": 136,
+    "long_context_candidates": 0
+  },
+  "semantic_progression": [
+    12,
+    1,
+    0
+  ],
+  "remaining_blocked_reasons": {
+    "baseline-ci-missing": 1,
+    "baseline-tests-missing": 2
+  },
+  "compute": {
+    "b300_rental_recommended": false,
+    "decision": "NOT_JUSTIFIED_BY_CURRENT_EVIDENCE",
+    "model_benchmark_justified": false
+  },
+  "conclusion": "No genuine semantic candidate survives evidence refinement in the pinned corpus."
+}

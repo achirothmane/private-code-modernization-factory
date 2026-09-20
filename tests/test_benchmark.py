@@ -45,7 +45,7 @@ class BenchmarkTests(unittest.TestCase):
     def test_medium_confidence_recipe_becomes_semantic_review_candidate(self):
         with TemporaryDirectory() as td:
             root = Path(td)
-            (root / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+            (root / "index.js").write_text("const sass = require(\'node-sass\');\nmodule.exports = sass;\n", encoding="utf-8")
             (root / "index.test.js").write_text("module.exports = true\n", encoding="utf-8")
             (root / "package.json").write_text(
                 json.dumps({
@@ -124,7 +124,7 @@ class BenchmarkTests(unittest.TestCase):
             json_path, md_path = write_benchmark(result, out)
             self.assertTrue(json_path.exists())
             self.assertTrue(md_path.exists())
-            self.assertIn("NOT_JUSTIFIED_BY_WAVE_7A", md_path.read_text(encoding="utf-8"))
+            self.assertIn("NOT_JUSTIFIED_BY_CURRENT_EVIDENCE", md_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

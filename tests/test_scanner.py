@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import json
 import unittest
 
 from modfactory.planner import build_plan
@@ -34,6 +35,110 @@ class ScannerTests(unittest.TestCase):
             self.assertLess(snap.risk_score, 20)
             phases = [p["title"] for p in build_plan(snap)]
             self.assertIn("Validate the existing test safety net", phases)
+
+    def test_python_detector_ignores_docstring_mentions(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text(
+                '"""Copied from distutils.util. import imp is also mentioned here."""\nVALUE = 1\n',
+                encoding="utf-8",
+            )
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+            snap = scan_repository(root)
+            legacy = [f.message for f in snap.findings if f.category == "legacy-api"]
+            self.assertNotIn("distutils is removed from modern Python", legacy)
+            self.assertNotIn("Python imp module is removed in Python 3.12+", legacy)
+
+    def test_python_detector_uses_import_syntax_not_free_text(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text(
+                "from distutils.core import setup\nfrom collections import MutableMapping\n",
+                encoding="utf-8",
+            )
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+            snap = scan_repository(root)
+            messages = {f.message for f in snap.findings}
+            self.assertIn("distutils is removed from modern Python", messages)
+            self.assertIn("Legacy collections ABC import pattern", messages)
+
+    def test_npm_detector_only_counts_direct_package_json_dependencies_with_usage(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "index.js").write_text(
+                "const request = require('request');\nconst sass = require('node-sass');\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps({
+                    "devDependencies": {
+                        "request": "^2.88.0",
+                        "node-sass": "^9.0.0",
+                    }
+                }),
+                encoding="utf-8",
+            )
+            (root / "package-lock.json").write_text(
+                json.dumps({
+                    "dependencies": {
+                        "request": {"version": "2.88.0"},
+                        "node-sass": {"version": "9.0.0"},
+                    }
+                }),
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            legacy = [f for f in snap.findings if f.category == "legacy-api"]
+            self.assertEqual(sum(f.message == "request npm package is deprecated" for f in legacy), 1)
+            self.assertEqual(sum(f.message == "node-sass is deprecated" for f in legacy), 1)
+            self.assertTrue(all(f.path == "package.json" for f in legacy))
+
+    def test_unused_deprecated_npm_dependency_does_not_escalate_to_semantic_migration(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                json.dumps({"devDependencies": {"request": "^2.88.0"}}),
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            legacy = [f for f in snap.findings if f.category == "legacy-api"]
+            hygiene = [f for f in snap.findings if f.category == "dependency-hygiene"]
+            self.assertFalse(any(f.message == "request npm package is deprecated" for f in legacy))
+            self.assertEqual(len(hygiene), 1)
+            self.assertIn("no observed source usage", hygiene[0].message)
+
+    def test_javax_detector_excludes_java_se_jcache_and_free_text(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "pom.xml").write_text(
+                "<groupId>javax.cache</groupId>\n<!-- javax.persistence is text only -->\n",
+                encoding="utf-8",
+            )
+            (root / "Safe.java").write_text(
+                "import javax.tools.JavaCompiler;\n"
+                "import javax.naming.event.ObjectChangeListener;\n"
+                "import javax.cache.configuration.MutableConfiguration;\n"
+                'class Safe { String s = "javax.persistence.Entity"; }\n',
+                encoding="utf-8",
+            )
+            (root / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+            snap = scan_repository(root)
+            messages = [f.message for f in snap.findings if f.category == "legacy-api"]
+            self.assertNotIn("Javax namespace detected", messages)
+
+    def test_javax_detector_keeps_known_jakarta_candidate_imports(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "App.java").write_text(
+                "import javax.persistence.Entity;\nclass App {}\n",
+                encoding="utf-8",
+            )
+            (root / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+            snap = scan_repository(root)
+            findings = [f for f in snap.findings if f.message == "Javax namespace detected"]
+            self.assertEqual(len(findings), 1)
+            self.assertIn("javax.persistence.Entity", findings[0].evidence)
 
 
 class HistoryTests(unittest.TestCase):

@@ -24,6 +24,7 @@ jobs:
             --manifest benchmarks/corpus.json \
             --output benchmark-results
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: modfactory-static-benchmark
           path: benchmark-results/benchmark/
