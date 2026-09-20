@@ -63,7 +63,7 @@ class ModelEvaluationPlanTests(unittest.TestCase):
 
             self.assertEqual(plan["eligible_tasks"], 0)
             self.assertEqual(plan["blocked_tasks"], 1)
-            self.assertEqual(plan["blocked"][0]["reason"], "verification-prerequisites-missing")
+            self.assertEqual(plan["blocked"][0]["reason"], "baseline-tests-missing")
             self.assertEqual(plan["compute_policy"]["next_gate"], "NO_ELIGIBLE_SEMANTIC_TASK")
 
     def test_plan_artifacts_are_reproducible_and_do_not_invoke_models(self):
