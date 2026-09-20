@@ -99,7 +99,8 @@ class BenchmarkTests(unittest.TestCase):
             )
             self.assertGreaterEqual(targeted["semantic_escalations"], 1)
             self.assertEqual(targeted["target_profile"], {"react-dom": "18"})
-            self.assertEqual(targeted["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
+            self.assertEqual(targeted["escalation"]["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+            self.assertEqual(targeted["escalation"]["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
 
     def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
         result = classify_escalation({
@@ -114,7 +115,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result["b300_gate"], "NOT_APPLICABLE")
         self.assertFalse(result["b300_rental_recommended"])
 
-    def test_large_semantic_pressure_only_marks_long_context_evaluation_candidate(self):
+    def test_large_repo_is_not_long_context_when_semantic_tasks_localize(self):
         result = classify_escalation({
             "patch_proposals": 0,
             "semantic_escalations": 3,
@@ -122,9 +123,32 @@ class BenchmarkTests(unittest.TestCase):
             "architecture_slices": 4,
             "compatibility_slices": 3,
             "workload_band": "large",
+            "model_evaluation": {
+                "eligible_tasks": 3,
+                "full_repository_context_tasks": 0,
+                "max_context_characters": 65000,
+            },
+        })
+        self.assertEqual(result["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+        self.assertEqual(result["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
+        self.assertFalse(result["b300_rental_recommended"])
+
+    def test_long_context_requires_task_level_context_evidence(self):
+        result = classify_escalation({
+            "patch_proposals": 0,
+            "semantic_escalations": 3,
+            "safety_blockers": 0,
+            "architecture_slices": 4,
+            "compatibility_slices": 3,
+            "workload_band": "large",
+            "model_evaluation": {
+                "eligible_tasks": 3,
+                "full_repository_context_tasks": 1,
+                "max_context_characters": 420000,
+            },
         })
         self.assertEqual(result["tier"], "LONG_CONTEXT_EVALUATION_CANDIDATE")
-        self.assertEqual(result["b300_gate"], "MEASURE_MODEL_THROUGHPUT_COST_FIRST")
+        self.assertEqual(result["b300_gate"], "MEASURE_LONG_CONTEXT_MODEL_LIMITS_FIRST")
         self.assertFalse(result["b300_rental_recommended"])
 
     def test_corpus_report_aggregates_and_writes_artifacts(self):
