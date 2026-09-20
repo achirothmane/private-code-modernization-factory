@@ -105,6 +105,23 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(targeted["escalation"]["tier"], "DETERMINISTIC")
             self.assertEqual(targeted["escalation"]["b300_gate"], "NOT_APPLICABLE")
 
+    def test_deterministic_compatibility_does_not_escalate_when_architecture_review_remains(self):
+        result = classify_escalation({
+            "patch_proposals": 4,
+            "semantic_escalations": 0,
+            "safety_blockers": 0,
+            "architecture_slices": 30,
+            "compatibility_slices": 4,
+            "workload_band": "large",
+            "model_evaluation": {
+                "eligible_tasks": 0,
+                "full_repository_context_tasks": 0,
+            },
+        })
+        self.assertEqual(result["tier"], "DETERMINISTIC")
+        self.assertEqual(result["b300_gate"], "NOT_APPLICABLE")
+        self.assertFalse(result["b300_rental_recommended"])
+
     def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
         result = classify_escalation({
             "patch_proposals": 0,
