@@ -62,10 +62,13 @@ class ScannerTests(unittest.TestCase):
             self.assertIn("distutils is removed from modern Python", messages)
             self.assertIn("Legacy collections ABC import pattern", messages)
 
-    def test_npm_detector_only_counts_direct_package_json_dependencies(self):
+    def test_npm_detector_only_counts_direct_package_json_dependencies_with_usage(self):
         with TemporaryDirectory() as td:
             root = Path(td)
-            (root / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+            (root / "index.js").write_text(
+                "const request = require('request');\nconst sass = require('node-sass');\n",
+                encoding="utf-8",
+            )
             (root / "package.json").write_text(
                 json.dumps({
                     "devDependencies": {
@@ -89,6 +92,21 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(sum(f.message == "request npm package is deprecated" for f in legacy), 1)
             self.assertEqual(sum(f.message == "node-sass is deprecated" for f in legacy), 1)
             self.assertTrue(all(f.path == "package.json" for f in legacy))
+
+    def test_unused_deprecated_npm_dependency_does_not_escalate_to_semantic_migration(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                json.dumps({"devDependencies": {"request": "^2.88.0"}}),
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            legacy = [f for f in snap.findings if f.category == "legacy-api"]
+            hygiene = [f for f in snap.findings if f.category == "dependency-hygiene"]
+            self.assertFalse(any(f.message == "request npm package is deprecated" for f in legacy))
+            self.assertEqual(len(hygiene), 1)
+            self.assertIn("no observed source usage", hygiene[0].message)
 
     def test_javax_detector_excludes_java_se_jcache_and_free_text(self):
         with TemporaryDirectory() as td:
