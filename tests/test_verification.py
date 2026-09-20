@@ -7,7 +7,7 @@ from modfactory.slices import build_migration_slices
 from modfactory.verification import build_differential_verification, write_verification
 
 
-def _add_baseline(root: Path, test_body: str = "def test_x(): assert True\n") -> None:
+def _add_baseline(root: Path, test_body: str = "import unittest\\n\\nclass T(unittest.TestCase):\\n    def test_x(self): self.assertTrue(True)\\n") -> None:
     (root / "tests").mkdir(exist_ok=True)
     (root / "tests" / "test_app.py").write_text(test_body, encoding="utf-8")
     (root / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
