@@ -127,7 +127,7 @@ def _finding(
     )
 
 
-def _python_legacy_findings(rel: str, text: str) -> list[Finding]:
+def _python_legacy_findings(rel: str, text: str, targets: dict[str, str]) -> list[Finding]:
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -196,6 +196,12 @@ def _python_legacy_findings(rel: str, text: str) -> list[Finding]:
                     "Use collections.abc equivalents.",
                     8,
                 )
+
+    python_target = targets.get("python")
+    target_pair = _version_pair(python_target) if python_target else None
+    if target_pair is not None and target_pair < (3, 12):
+        detected.pop("Python imp module is removed in Python 3.12+", None)
+        detected.pop("distutils is removed from modern Python", None)
 
     return [
         _finding(
@@ -345,9 +351,16 @@ def _npm_dependency_version(payload: dict[str, object], package: str) -> str | N
     return None
 
 
+def _version_pair(version: str) -> tuple[int, int] | None:
+    match = re.search(r"(?<!\d)(\d+)(?:\.(\d+))?", version)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0)
+
+
 def _semver_major(version: str) -> int | None:
-    match = re.search(r"(?<!\d)(\d+)(?:\.\d+)?(?:\.\d+)?", version)
-    return int(match.group(1)) if match else None
+    pair = _version_pair(version)
+    return pair[0] if pair else None
 
 
 def _javascript_legacy_findings(
@@ -502,7 +515,7 @@ def _legacy_findings_for_file(
     findings: list[Finding] = []
 
     if lang == "Python":
-        findings.extend(_python_legacy_findings(rel, text))
+        findings.extend(_python_legacy_findings(rel, text, targets))
 
     if path.name == "package.json":
         findings.extend(_npm_manifest_findings(root, path, rel, text))
