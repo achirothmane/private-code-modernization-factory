@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .benchmark import benchmark_corpus, write_benchmark
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
 from .report import write_report
 from .scanner import scan_repository
@@ -40,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Explicitly allow discovered test commands to run in temporary copies")
     verify.add_argument("--timeout", type=int, default=120,
                         help="Per-command timeout in seconds when project-code execution is enabled")
+
+    bench = sub.add_parser("benchmark", help="Measure deterministic coverage and escalation pressure across a local corpus")
+    bench.add_argument("corpus", help="Directory containing repository subdirectories")
+    bench.add_argument("--manifest", help="Optional JSON manifest with repository metadata and relative paths")
+    bench.add_argument("--output", default=".modfactory", help="Output directory")
+    bench.add_argument("--diff-budget", type=int, default=DEFAULT_DIFF_BUDGET,
+                       help="Maximum added+removed lines allowed when probing deterministic proposals")
     return parser
 
 
@@ -105,6 +113,22 @@ def main(argv: list[str] | None = None) -> int:
         if result["status"] == "REVIEW":
             return 4
         return 5
+
+    if args.command == "benchmark":
+        if args.diff_budget < 1:
+            print("--diff-budget must be >= 1", file=sys.stderr)
+            return 2
+        result = benchmark_corpus(
+            args.corpus,
+            manifest_path=args.manifest,
+            diff_budget=args.diff_budget,
+        )
+        json_path, md_path = write_benchmark(result, args.output)
+        print(f"Repositories: {result['repositories_analyzed']}/{result['repositories_requested']}")
+        print(f"Elapsed: {result['elapsed_seconds']}s")
+        print(f"JSON: {json_path}")
+        print(f"Markdown: {md_path}")
+        return 0 if not result["errors"] else 6
 
     return 1
 

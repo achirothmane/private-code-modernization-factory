@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "note": "Pinned public repositories for static-only Wave 7A benchmarking. No project code is executed.",
+  "repositories": [
+    {
+      "name": "python-twofish",
+      "repo": "keybase/python-twofish",
+      "commit": "c4b9cdbb15727c89c14a7d808ec1a59e84da7149",
+      "path": "python-twofish"
+    },
+    {
+      "name": "requests",
+      "repo": "psf/requests",
+      "commit": "dae7ef63b4df6eded86637f251fc4e3a06c3b479",
+      "path": "requests"
+    },
+    {
+      "name": "flask",
+      "repo": "pallets/flask",
+      "commit": "d73fa1cdcbd8b1465c151db8924ba58b1dd14e35",
+      "path": "flask"
+    },
+    {
+      "name": "django",
+      "repo": "django/django",
+      "commit": "446d9cf602a5c42862da118b714a5679bb61cf27",
+      "path": "django"
+    },
+    {
+      "name": "pytest",
+      "repo": "pytest-dev/pytest",
+      "commit": "6a0de9be56365e75ff30d75cee9654739ca95f97",
+      "path": "pytest"
+    },
+    {
+      "name": "express",
+      "repo": "expressjs/express",
+      "commit": "9a34acf03cb818ff3f8bc40e44176e277a25cbb9",
+      "path": "express"
+    },
+    {
+      "name": "lodash",
+      "repo": "lodash/lodash",
+      "commit": "2b5e6f7399a7b48005140b5d5c6bc6c0e62919a8",
+      "path": "lodash"
+    },
+    {
+      "name": "spring-petclinic",
+      "repo": "spring-projects/spring-petclinic",
+      "commit": "818c4136ea971c21674525f9053de0d9c7ad8cfe",
+      "path": "spring-petclinic"
+    },
+    {
+      "name": "commons-lang",
+      "repo": "apache/commons-lang",
+      "commit": "9c94f38ff471b131d02a46434455b214029d9d91",
+      "path": "commons-lang"
+    },
+    {
+      "name": "ansible",
+      "repo": "ansible/ansible",
+      "commit": "1a4c6636245e72e64422f3e83e264f32c304fb65",
+      "path": "ansible"
+    }
+  ]
+}
