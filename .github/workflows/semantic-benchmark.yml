@@ -1,0 +1,38 @@
+name: Wave 7C Real Semantic Benchmark
+
+on:
+  push:
+    branches:
+      - wave7c-real-semantic-corpus
+    paths:
+      - ".github/workflows/semantic-benchmark.yml"
+      - "benchmarks/semantic-corpus.json"
+      - "src/modfactory/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Fetch pinned real-semantic corpus
+        run: python benchmarks/fetch_corpus.py benchmarks/semantic-corpus.json .semantic-corpus
+      - name: Run static benchmark
+        run: |
+          modfactory benchmark .semantic-corpus \
+            --manifest benchmarks/semantic-corpus.json \
+            --output semantic-benchmark-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modfactory-wave7c-real-semantic
+          path: semantic-benchmark-results/benchmark/
+          if-no-files-found: error
