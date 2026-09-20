@@ -1,0 +1,68 @@
+name: Wave 7G Provider-Neutral Runner Contract
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Fetch pinned Wave 7F survivor
+        run: python benchmarks/fetch_corpus.py benchmarks/wave7f-corpus.json .wave7g-corpus
+      - name: Build exact evaluation plan
+        run: |
+          modfactory eval-plan .wave7g-corpus/auth0-node-wsfed-request-tests \
+            --output wave7g-plan
+      - name: Build provider-neutral request
+        shell: bash
+        run: |
+          TASK_ID=$(python -c "import json; print(json.load(open('wave7g-plan/model-eval/plan.json'))['tasks'][0]['task_id'])")
+          modfactory model-request wave7g-plan/model-eval/plan.json \
+            --task-id "$TASK_ID" \
+            --provider benchmark-contract \
+            --model ordinary-model-pending \
+            --output wave7g-request
+      - name: Validate request invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          request = json.loads(Path("wave7g-request/model-bench/request.json").read_text())
+          task = request["task"]
+          context = task["context_files"]
+          assert request["execution_policy"]["invokes_provider"] is False
+          assert request["execution_policy"]["executes_project_code"] is False
+          assert request["execution_policy"]["applies_patch_to_original"] is False
+          assert len([x for x in context if x["role"] == "usage-site"]) == 7
+          assert all(len(x["sha256"]) == 64 for x in context)
+          assert task["context_characters"] == 38731
+          assert task["context_band"] == "small"
+          assert task["requires_full_repository_context"] is False
+          assert len(task["allowed_changes"]) == 8
+          print(json.dumps({
+              "benchmark_id": request["benchmark_id"],
+              "task_id": request["task_id"],
+              "context_files": len(context),
+              "usage_sites": 7,
+              "context_characters": task["context_characters"],
+              "allowed_changes": len(task["allowed_changes"]),
+              "provider_invoked": False,
+          }, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: modfactory-wave7g-runner-contract
+          path: |
+            wave7g-plan/model-eval/
+            wave7g-request/model-bench/
+          if-no-files-found: error

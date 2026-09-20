@@ -6,7 +6,7 @@ The tool does not grant an AI authority to rewrite, merge, or deploy a repositor
 
 ## Core pipeline
 
-repo → explicit target profile → snapshot → evidence refinement → target compatibility → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → context minimization → model-evaluation plan → human review
+repo → explicit target profile → snapshot → evidence refinement → target compatibility → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → context minimization → model-evaluation plan → provider-neutral model request → response scoring → human review
 
 ## Commands
 
@@ -66,6 +66,36 @@ Build a context-minimized model evaluation dataset without invoking a model:
 modfactory eval-plan /path/to/repository \
   --target react-dom=18 \
   --output model-eval-results
+~~~
+
+Build a provider-neutral request artifact for one eligible semantic task:
+
+~~~bash
+modfactory model-request model-eval-results/model-eval/plan.json \
+  --task-id <task-id> \
+  --provider <provider-id> \
+  --model <model-id> \
+  --output model-benchmark
+~~~
+
+Score a provider response without executing project code:
+
+~~~bash
+modfactory model-score /path/to/repository \
+  --request model-benchmark/model-bench/request.json \
+  --response provider-response.json \
+  --output model-benchmark
+~~~
+
+Project tests remain explicit opt-in:
+
+~~~bash
+modfactory model-score /path/to/repository \
+  --request model-benchmark/model-bench/request.json \
+  --response provider-response.json \
+  --output model-benchmark \
+  --allow-project-code \
+  --timeout 120
 ~~~
 
 Supported explicit targets currently include `react-dom`, `spring-boot`, and `python`. Corpus manifests can also define a different `targets` object per repository.
@@ -237,6 +267,45 @@ No model inference was run in Wave 7F. This environment does not currently expos
 
 Wave 7F therefore establishes the first benchmark-ready semantic survivor. The next engineering step is an ordinary-model runner/scorer that consumes this exact task bundle and records patch correctness, scope compliance, tests, latency, tokens, and cost when a measured inference provider is available.
 
+## Wave 7G: Provider-Neutral Model Runner + Scorer
+
+Wave 7G builds the benchmark machinery required by the Wave 7F semantic survivor without binding ModFactory to one inference vendor.
+
+The benchmark is split into three independent layers:
+
+1. **Request contract** — freezes the exact semantic task, provider/model identity, context files, allowlist, and response schema.
+2. **Provider adapter runner** — any future provider adapter implements one `invoke(request)` method. The runner measures wall-clock latency and accepts token/cost metrics only when the provider returns them.
+3. **Response scorer** — validates the response envelope, verifies repository baseline hashes, rejects unsafe/out-of-scope diffs, applies the patch only inside a temporary copy, re-runs static analysis, and optionally runs project tests when explicitly enabled.
+
+Safety and reproducibility gates added in Wave 7G:
+
+- every context file now carries a SHA-256 hash of its full source;
+- the complete task is hashed into `task_sha256`;
+- `benchmark_id` is deterministically derived from that task hash;
+- changed repository context after request creation blocks scoring;
+- task tampering after request creation blocks scoring;
+- file creation/deletion, rename/copy operations, binary patches, path traversal, and changes outside the explicit allowlist are blocked;
+- multi-file unified diffs are normalized for reproducible `git apply`;
+- the original repository is never modified;
+- unknown latency/token/cost metrics remain null rather than being estimated.
+
+A real contract run was generated against the Wave 7F Auth0 survivor:
+
+- workflow run: `35487640138`
+- artifact: `10598316289`
+- benchmark ID: `126397b865a6199a`
+- task ID: `model-d866304f07`
+- context files: 8
+- request usage sites: 7
+- allowed-change paths: 8
+- context characters: 38,731
+- context band: small
+- provider invoked: false
+
+The in-process provider-neutral runner is covered by a fake adapter test that proves latency measurement plus provider-supplied input tokens, output tokens, and cost are preserved in the canonical response envelope. No real inference was performed.
+
+Wave 7G therefore closes the **measurement infrastructure** gap. It does **not** claim a model quality result yet.
+
 ## Compute gate
 
 Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
@@ -257,9 +326,12 @@ Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 
 - benchmarks/corpus.json — broad 10-repository Wave 7A/7B corpus.
 - benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage; Wave 7D also carries per-repository explicit modernization targets.
+- benchmarks/wave7f-corpus.json — isolated pinned semantic-survivor corpus for Auth0 node-wsfed.
 - benchmarks/fetch_corpus.py — fetches exact pinned commits without executing target project code.
 - .github/workflows/benchmark.yml — manual broad benchmark.
 - .github/workflows/semantic-benchmark.yml — manual Wave 7C–7E target-aware benchmark, deterministic proposal evidence, and model-evaluation-plan artifact.
+- .github/workflows/wave7f-semantic-survivor.yml — manual first-survivor benchmark.
+- .github/workflows/wave7g-runner-contract.yml — manual provider-neutral request-contract validation.
 
 Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
@@ -303,7 +375,8 @@ General imp → importlib remains blocked until its semantics can be encoded and
 - patches.py — one-slice patch proposal engine.
 - verification.py — temporary-copy differential verification.
 - benchmark.py — corpus scale, deterministic coverage, context-locality, and escalation measurement.
-- model_eval.py — context-minimized, non-executing model evaluation task generation.
+- model_eval.py — context-minimized, non-executing model evaluation task generation with full-file context hashes.
+- model_bench.py — provider-neutral request contract, adapter runner, safe patch scoring, latency/token/cost recording, and baseline identity gates.
 - models.py — structured evidence models.
 - planner.py — staged modernization plan.
 - report.py — evidence reports.
@@ -323,7 +396,8 @@ General imp → importlib remains blocked until its semantics can be encoded and
 7D. ✅ Explicit Target Profile + Model Evaluation Harness + Context Locality Gate.
 7E. ✅ Deterministic Falsification Before Model Inference — 4/4 real React 18 tasks converted to verified deterministic proposals; model benchmark cancelled for this case.
 7F. ✅ First Real Semantic Survivor — Auth0 node-wsfed test-suite request migration survives all current gates; exact 8-file bundle, 38,731 characters, model benchmark justified but not yet executed.
-7G. Build the measured ordinary-model runner/scorer and run it only through a provider that exposes model identity, latency, token usage, and cost.
+7G. ✅ Provider-Neutral Model Runner + Scorer — exact task/request hashing, repository baseline identity, safe diff application, provider adapter contract, latency/token/cost envelope, and real Auth0 request artifact.
+7H. Connect one measured inference provider and run the first ordinary-model benchmark on benchmark `126397b865a6199a`; do not escalate to long-context/B300 unless measured evidence demands it.
 
 ## Principle
 

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "wave": "7G",
+  "title": "Provider-Neutral Model Runner + Scorer",
+  "workflow_run_id": 35487640138,
+  "artifact_id": 10598316289,
+  "benchmark": {
+    "id": "126397b865a6199a",
+    "task_id": "model-d866304f07",
+    "repo": "auth0/node-wsfed",
+    "commit": "3bd751a1749d8746b981ce0e8daabe9eaec654b0",
+    "context_files": 8,
+    "usage_sites": 7,
+    "allowed_changes": 8,
+    "context_characters": 38731,
+    "context_band": "small"
+  },
+  "infrastructure": {
+    "provider_neutral_request": true,
+    "provider_adapter_protocol": true,
+    "runner_wall_clock_latency": true,
+    "provider_token_metrics": true,
+    "provider_cost_metrics": true,
+    "request_task_hash": true,
+    "context_file_hashes": true,
+    "repository_baseline_identity": true,
+    "exact_allowlist": true,
+    "safe_temp_patch_application": true,
+    "optional_project_tests": true
+  },
+  "execution": {
+    "real_provider_invoked": false,
+    "real_model_quality_benchmark_run": false,
+    "project_code_executed": false
+  },
+  "compute": {
+    "ordinary_model_benchmark_infrastructure_ready": true,
+    "ordinary_model_benchmark_justified": true,
+    "long_context_benchmark_justified": false,
+    "b300_benchmark_justified": false,
+    "b300_rental_recommended": false
+  },
+  "conclusion": "Measurement infrastructure is ready; no model quality result is claimed until a real measured provider adapter run occurs."
+}

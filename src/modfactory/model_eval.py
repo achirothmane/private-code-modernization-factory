@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -153,6 +154,7 @@ def _context_file(root: Path, path: Path, role: str, signal: str = "") -> dict[s
         "characters": len(content),
         "original_characters": len(raw),
         "truncated": truncated,
+        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         "content": content,
     }
 
