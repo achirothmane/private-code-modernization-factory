@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "note": "Pinned public repositories selected for real source-level legacy API usage. Wave 7C then applies usage and target-compatibility gates to determine whether the legacy evidence is actually actionable. Static-only; target project code is not executed.",
+  "repositories": [
+    {
+      "name": "h2oai-wave-reactdom",
+      "repo": "h2oai/wave",
+      "commit": "fff04af6d92584d75ce7e946d2c449230461dfcb",
+      "path": "h2oai-wave-reactdom",
+      "evidence": "ui and ide source contain ReactDOM.render; package context declares react-dom 17/16, so the final target-compatibility gate suppresses migration escalation"
+    },
+    {
+      "name": "stackstorm-st2web-reactdom",
+      "repo": "StackStorm/st2web",
+      "commit": "4925b85852b78ad8db71e4e5e4bf913b230565f4",
+      "path": "stackstorm-st2web-reactdom",
+      "evidence": "main.js contains ReactDOM.render; target context determines whether a React 18+ migration is actionable"
+    },
+    {
+      "name": "devices-css-node-sass",
+      "repo": "picturepan2/devices.css",
+      "commit": "11846244977a4905a4fb9ac12bb2121e068d6147",
+      "path": "devices-css-node-sass",
+      "evidence": "package.json directly depends on node-sass and gulpfile.js requires node-sass"
+    },
+    {
+      "name": "timesheet-js-node-sass",
+      "repo": "sbstjn/timesheet.js",
+      "commit": "1354b057500dafa02dc17b0bc95ae4c77cf925f4",
+      "path": "timesheet-js-node-sass",
+      "evidence": "package.json directly depends on node-sass and serve.js requires/uses it"
+    },
+    {
+      "name": "prezi-changelog-imp",
+      "repo": "prezi/changelog",
+      "commit": "c59a9f4420f1e6dc6da77ea3f83bc516ce5ac25d",
+      "path": "prezi-changelog-imp",
+      "evidence": "settings.py imports imp and calls imp.load_source"
+    }
+  ]
+}

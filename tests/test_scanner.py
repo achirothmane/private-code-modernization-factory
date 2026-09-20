@@ -108,6 +108,38 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(len(hygiene), 1)
             self.assertIn("no observed source usage", hygiene[0].message)
 
+    def test_reactdom_render_is_not_escalated_for_react_17(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "ui" / "src").mkdir(parents=True)
+            (root / "ui" / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^17.0.2", "react-dom": "^17.0.2"}}),
+                encoding="utf-8",
+            )
+            (root / "ui" / "src" / "index.tsx").write_text(
+                "import ReactDOM from 'react-dom';\nReactDOM.render(<App />, document.getElementById('root'));\n",
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            self.assertFalse(any(f.message == "Legacy React render API detected" for f in snap.findings))
+
+    def test_reactdom_render_is_escalated_when_react_dom_is_18_plus(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "ui" / "src").mkdir(parents=True)
+            (root / "ui" / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^18.2.0", "react-dom": "^18.2.0"}}),
+                encoding="utf-8",
+            )
+            (root / "ui" / "src" / "index.tsx").write_text(
+                "import ReactDOM from 'react-dom';\nReactDOM.render(<App />, document.getElementById('root'));\n",
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            findings = [f for f in snap.findings if f.message == "Legacy React render API detected"]
+            self.assertEqual(len(findings), 1)
+            self.assertIn("react-dom=^18.2.0", findings[0].evidence)
+
     def test_javax_detector_excludes_java_se_jcache_and_free_text(self):
         with TemporaryDirectory() as td:
             root = Path(td)

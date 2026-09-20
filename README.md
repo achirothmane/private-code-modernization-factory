@@ -2,11 +2,11 @@
 
 Evidence-first repository modernization analysis, constrained patch proposal generation, differential before/after verification, and escalation control.
 
-The tool does not grant an AI authority to rewrite, merge, or deploy a repository blindly. It first strengthens the evidence itself, then decides whether deterministic automation, safety work, human review, or model evaluation is justified.
+The tool does not grant an AI authority to rewrite, merge, or deploy a repository blindly. It first strengthens the evidence and target context, then decides whether deterministic automation, safety work, human review, or model evaluation is justified.
 
 ## Core pipeline
 
-repo → snapshot → evidence refinement → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → scale/escalation benchmark → human review
+repo → snapshot → evidence refinement → target compatibility → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → scale/escalation benchmark → human review
 
 ## Commands
 
@@ -55,7 +55,7 @@ modfactory benchmark /path/to/corpus \
 
 The first reproducible corpus run on 2026-09-20 analyzed 10 pinned public repositories, 6,326 source files, and 2,195,930 lines. It initially reported 17 compatibility slices and 12 semantic escalations.
 
-That result did not justify a B300 rental, but Wave 7B showed an even more important fact: many of those semantic signals were not genuine migration workloads.
+That result did not justify a B300 rental. Wave 7B then showed that many apparent semantic signals were evidence-quality problems.
 
 ## Wave 7B: Evidence Refinement Gate
 
@@ -65,40 +65,66 @@ Wave 7B refines evidence before any model call:
 - Documentation and comments mentioning distutils or imp do not become migration findings.
 - npm deprecation findings come from direct package.json dependencies, not lockfile duplicates.
 - Deprecated npm packages require observed import, require, dynamic import, or package-script usage before becoming semantic migration candidates.
-- A direct deprecated dependency with no observed usage becomes dependency-hygiene work: verify removal, regenerate the lockfile, and run the baseline.
+- A direct deprecated dependency with no observed usage becomes dependency-hygiene work.
 - javax detection is restricted to actual Java imports from known Jakarta-migration namespaces.
 - Java SE namespaces, JCache, XML/config strings, documentation, and system-property text do not trigger Jakarta migration automatically.
 
-The final Wave 7B run on the same exact 10-repository corpus produced:
+The same 10-repository corpus moved from 12 → 1 → 0 semantic escalations. Final Wave 7B: 3 compatibility slices, 3 safety blockers, 136 architecture slices, 0 long-context candidates.
 
-- repositories analyzed: 10 / 10
-- source files: 6,326
-- lines: 2,195,930
-- findings: 486
+## Wave 7C: Real Legacy Evidence + Target Compatibility Gate
+
+Wave 7C deliberately searched a separate corpus of public repositories containing real source-level legacy API usage:
+
+- h2oai/wave — ReactDOM.render in TypeScript/React source.
+- StackStorm/st2web — ReactDOM.render in application source.
+- picturepan2/devices.css — direct node-sass dependency plus require usage.
+- sbstjn/timesheet.js — direct node-sass dependency plus runtime usage.
+- prezi/changelog — import imp plus imp.load_source.
+
+The first run produced 4 semantic escalations, all inside h2oai/wave, making it appear to be a LONG_CONTEXT_EVALUATION_CANDIDATE.
+
+Target context falsified that conclusion: the relevant h2oai/wave packages declare react-dom 17 and 16. ReactDOM.render is expected for those versions; createRoot becomes relevant when React 18+ is the current or target stack. Wave 7C therefore added a Target Compatibility Gate that resolves the nearest package.json and only treats ReactDOM.render as a migration signal when react-dom is 18+.
+
+Final Wave 7C on the same 5 repositories:
+
+- repositories analyzed: 5 / 5
+- source files: 1,040
+- lines: 980,491
+- findings: 34
 - compatibility slices: 3
 - semantic escalations: 0
 - safety blockers: 3
-- architecture slices: 136
+- architecture slices: 45
 - LONG_CONTEXT_EVALUATION_CANDIDATE: 0
 - B300 rental recommended: false
 
-The semantic count therefore moved from 12 → 1 → 0 as evidence quality improved.
+The apparent semantic count moved **4 → 0** after target compatibility was added.
 
-No model/compute benchmark is justified for this corpus because no genuine semantic candidate survives the Evidence Refinement Gate. Model evaluation is deferred until a future corpus produces a real semantic candidate that deterministic evidence cannot resolve.
+The three remaining compatibility cases are real node-sass/imp evidence, but they are blocked by missing verification prerequisites rather than semantic ambiguity. The correct next step for those cases is baseline/test/CI enablement, not an LLM.
 
 ## Compute gate
 
-Repository size alone never justifies expensive compute.
+Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
 
-A model benchmark is allowed only after a genuine semantic candidate survives evidence refinement. A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and the remaining workload is large enough that measured quality, latency, throughput, or total cost could improve materially.
+A model benchmark is allowed only after a genuine semantic candidate survives:
+1. source-level evidence refinement;
+2. usage evidence;
+3. target-version / target-stack compatibility;
+4. verification prerequisites.
 
-Current decision: NOT_JUSTIFIED_BY_CURRENT_EVIDENCE.
+A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and measured quality, latency, throughput, or total cost can plausibly improve.
 
-## Reproducible public corpus
+Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 
-benchmarks/corpus.json pins 10 public repositories to exact commit SHAs across Python, JavaScript, and Java.
+## Reproducible corpora
 
-benchmarks/fetch_corpus.py fetches those commits without running project code. The manual GitHub Actions workflow .github/workflows/benchmark.yml runs static ModFactory logic and uploads benchmark evidence even when a corpus item fails, so partial failures remain diagnosable.
+- benchmarks/corpus.json — broad 10-repository Wave 7A/7B corpus.
+- benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage and target-context falsification.
+- benchmarks/fetch_corpus.py — fetches exact pinned commits without executing target project code.
+- .github/workflows/benchmark.yml — manual broad benchmark.
+- .github/workflows/semantic-benchmark.yml — manual Wave 7C benchmark.
+
+Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
 ## Escalation tiers
 
@@ -106,15 +132,15 @@ benchmarks/fetch_corpus.py fetches those commits without running project code. T
 - ARCHITECTURE_REVIEW — architecture pressure exists, but no semantic migration signal justifies model escalation.
 - DETERMINISTIC — detected compatibility work is covered by deterministic transforms.
 - SAFETY_FIRST — tests, CI, or test-command evidence must be repaired before model intelligence.
-- SEMANTIC_REVIEW_CANDIDATE — a genuine semantic migration exceeds deterministic transforms.
-- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work; this authorizes only a model benchmark, never automatic B300 rental.
+- SEMANTIC_REVIEW_CANDIDATE — a genuine semantic migration exceeds deterministic transforms after context gates.
+- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work after context gates; this authorizes only a model benchmark, never automatic B300 rental.
 
 ## Current deterministic transforms
 
 - distutils.core imports → setuptools
 - simple collections ABC imports or attribute references → collections.abc
 
-General imp → importlib remains blocked until its semantics can be encoded and verified without guessing. Other migrations are escalated only when source-level evidence proves the relevant API/dependency is actually used.
+General imp → importlib remains blocked until its semantics can be encoded and verified without guessing. Other migrations escalate only when source, usage, target compatibility, and verification evidence support them.
 
 ## Safety boundaries
 
@@ -127,7 +153,7 @@ General imp → importlib remains blocked until its semantics can be encoded and
 
 ## Architecture
 
-- scanner.py — evidence-refined repository inventory and modernization signals.
+- scanner.py — evidence-refined, target-aware repository modernization signals.
 - history.py — churn and ownership evidence.
 - architecture.py — dependency graph, cycles, hubs, upgrade boundaries.
 - commands.py — evidence-backed command discovery.
@@ -152,10 +178,11 @@ General imp → importlib remains blocked until its semantics can be encoded and
 6. ✅ Differential Verification Engine.
 7A. ✅ Scale & Escalation Benchmark.
 7B. ✅ Evidence Refinement Gate.
-7C. Model/compute benchmark only when a genuine semantic candidate survives 7B.
+7C. ✅ Real Legacy Evidence Corpus + Target Compatibility Gate.
+7D. Model/compute benchmark only when a genuine semantic candidate survives all current gates.
 
 ## Principle
 
-**Generation is not evidence. Evidence is not authority. Scale is not proof that expensive compute is needed.**
+**Generation is not evidence. Evidence is not authority. Legacy syntax is not a migration requirement. Scale is not proof that expensive compute is needed.**
 
 Every escalation must earn its added complexity and cost with stronger evidence and measured improvement.
