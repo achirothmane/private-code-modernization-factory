@@ -59,6 +59,49 @@ class ModelEvaluationPlanTests(unittest.TestCase):
             self.assertEqual(plan["blocked"][0]["reason"], "baseline-tests-missing")
             self.assertEqual(plan["compute_policy"]["next_gate"], "NO_ELIGIBLE_SEMANTIC_TASK")
 
+
+    def test_npm_semantic_task_includes_every_observed_usage_site_and_exact_scope(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "test").mkdir()
+            (root / "test" / "a.test.js").write_text(
+                "var request = require('request');\nrequest.get('http://example.test', function () {});\n",
+                encoding="utf-8",
+            )
+            (root / "test" / "b.test.js").write_text(
+                "const request = require('request');\nrequest.post({ uri: 'http://example.test' }, function () {});\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"test": "node test/a.test.js"},
+                    "devDependencies": {"request": "~2.88.2"},
+                }),
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n      - run: npm test\n",
+                encoding="utf-8",
+            )
+
+            snapshot = scan_repository(root)
+            plan = build_model_evaluation_plan(root, snapshot)
+
+            self.assertEqual(plan["eligible_tasks"], 1, plan)
+            task = plan["tasks"][0]
+            usage_paths = [
+                item["path"] for item in task["context_files"]
+                if item["role"] == "usage-site"
+            ]
+            self.assertEqual(usage_paths, ["test/a.test.js", "test/b.test.js"])
+            self.assertEqual(
+                task["allowed_changes"],
+                ["package.json", "test/a.test.js", "test/b.test.js"],
+            )
+            self.assertNotIn("directly related tests", task["allowed_changes"])
+            self.assertEqual(plan["compute_policy"]["next_gate"], "RUN_ORDINARY_MODEL_BENCHMARK")
+
     def test_plan_artifacts_are_reproducible_and_do_not_invoke_models(self):
         with TemporaryDirectory() as td, TemporaryDirectory() as out:
             root = Path(td)
