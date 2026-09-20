@@ -61,12 +61,15 @@ def classify_escalation(metrics: dict[str, object]) -> dict[str, object]:
     if compatibility == 0 and architecture == 0:
         tier = "NO_MODERNIZATION_SIGNAL"
         reason = "No compatibility or architecture migration slice was detected."
+    elif compatibility > 0 and semantic == 0 and proposed == compatibility:
+        tier = "DETERMINISTIC"
+        reason = (
+            "All detected compatibility work is covered by deterministic transforms. "
+            "Architecture review may still remain, but it does not justify model escalation."
+        )
     elif compatibility == 0 and semantic == 0 and architecture > 0:
         tier = "ARCHITECTURE_REVIEW"
         reason = "Architecture pressure exists, but there is no semantic migration signal that justifies model escalation."
-    elif semantic == 0 and architecture == 0 and proposed > 0:
-        tier = "DETERMINISTIC"
-        reason = "Detected compatibility work is covered by deterministic transforms."
     elif safety > 0 and semantic == 0 and proposed == 0:
         tier = "SAFETY_FIRST"
         reason = "Verification prerequisites are missing; add baseline tests/CI before adding model intelligence."
