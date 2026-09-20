@@ -1,120 +1,129 @@
 # Private Code Modernization Factory — MVP
 
-Evidence-first repository modernization analysis and constrained patch proposal generation. The tool does **not** grant an AI authority to rewrite or merge a repository blindly. It maps risk and architecture, discovers verification commands, generates a non-executing baseline harness, attaches deterministic migration recipes, produces constrained migration slices, and can generate a review-only diff for one supported slice at a time.
+Evidence-first repository modernization analysis, constrained patch proposal generation, and differential before/after verification.
+
+The tool does not grant an AI authority to rewrite, merge, or deploy a repository blindly. It maps risk and architecture, discovers verification commands, generates a non-executing baseline harness, attaches deterministic migration recipes, produces constrained migration slices, generates a review-only patch proposal, then verifies the proposed change inside temporary repository copies.
 
 ## Core pipeline
 
-repo → snapshot → blockers → architecture graph → command discovery → baseline harness → recipe match → migration slice → constrained patch proposal → verification evidence
+repo → snapshot → blockers → architecture graph → command discovery → baseline harness → recipe → migration slice → patch proposal → before/after verification → human review
 
 ## Current capabilities
 
 - Detect languages and build/dependency manifests.
 - Detect tests and GitHub Actions CI.
-- Discover existing test/build/lint commands from CI, package scripts, Python layout, tox, Make, Go, Cargo, Maven, Gradle, and legacy setup.py.
-- Mark discovered repository commands as manual/sandbox-only; ModFactory never auto-executes them.
-- Generate a baseline harness under the output directory, including static Python syntax validation without importing repository modules.
+- Discover test/build/lint commands from CI, package scripts, Python layout, tox, Make, Go, Cargo, Maven, Gradle, and legacy setup.py.
+- Generate a baseline harness without importing repository modules.
 - Detect selected obsolete APIs and deprecated dependency patterns.
-- Flag oversized source files that increase migration blast radius.
-- Analyze Git history for high-churn/single-owner hotspots.
-- Build internal Python and JavaScript/TypeScript dependency graphs.
-- Detect dependency cycles and high fan-in/fan-out hubs.
-- Attach migration recipes for known modernization patterns.
-- Encode preconditions, allowed scope, verification, and rollback triggers.
-- Convert architecture boundaries and recipes into constrained migration slices.
-- Generate a patch proposal for exactly one migration slice at a time.
-- Enforce an exact file allowlist and configurable diff budget.
-- Generate patches only for deterministic high-confidence transforms; unsupported or ambiguous recipes are BLOCKED.
-- Never apply the generated patch, create a commit, or auto-merge it.
-- Produce a 0–100 modernization risk score and BLOCK / REVIEW / PASS gate.
-- Emit JSON and Markdown evidence.
-- Zero runtime dependencies.
+- Analyze Git history, dependency cycles, and dependency hubs.
+- Attach migration recipes with preconditions, verification requirements, and rollback triggers.
+- Generate one-slice deterministic patch proposals with file allowlists and diff budgets.
+- Refuse unsupported, ambiguous, medium-confidence, or advisory transformations.
+- Materialize proposed changes only inside temporary copies during verification.
+- Compare before/after findings, risk score, source-file count, and dependency cycles.
+- Require the targeted finding to disappear and block new findings.
+- Keep project-code execution OFF by default.
+- With explicit --allow-project-code, run discovered test commands in temporary before/after copies.
+- Distinguish baseline failure from patch regression.
+- Record test timing as observation only; performance timing is not yet a gate.
+- Never modify the original repository, create commits, auto-merge, or deploy.
 
-## Generated evidence bundle
+## Commands
 
-Running an analysis writes:
+Analyze:
 
-- `report.json`
-- `report.md`
-- `harness/harness.json`
-- `harness/baseline.sh`
-- optional generated static-check helpers such as `harness/python_syntax_check.py`
-
-A patch proposal writes:
-
-- `patch/proposal.json`
-- `patch/change.diff`
-
-The generated `baseline.sh` intentionally does **not** execute commands copied from the target repository. Patch proposals likewise do **not** modify the repository.
-
-## Initial recipe catalog
-
-- Python `imp` → `importlib`
-- Python `distutils` → `setuptools`
-- `collections` ABCs → `collections.abc`
-- `node-sass` → Dart Sass
-- npm `request` → maintained HTTP client
-- `ReactDOM.render` → `createRoot`
-- `javax` → Jakarta assessment recipe
-
-Wave 5 currently generates deterministic diffs for:
-
-- `distutils.core` import → `setuptools`
-- simple `collections` ABC imports/attribute references → `collections.abc`
-
-Other recipes remain analysis-only until a transform can be encoded without semantic guessing.
-
-## Run
-
-```bash
-python -m pip install -e .
+~~~bash
 modfactory analyze /path/to/repository --output .modfactory
-```
+~~~
 
-Use a slice ID from `report.json` or `report.md` to request one proposal:
+Generate a review-only proposal:
 
-```bash
+~~~bash
 modfactory propose /path/to/repository \
   --slice-id <slice-id> \
   --output .modfactory \
   --diff-budget 80
-```
+~~~
 
-CI-style risk gate:
+Run static differential verification without executing project code:
 
-```bash
-modfactory analyze . --output .modfactory --fail-on high
-```
+~~~bash
+modfactory verify /path/to/repository \
+  --slice-id <slice-id> \
+  --output .modfactory
+~~~
 
-## Patch proposal safety policy
+Inside a trusted environment, explicitly enable project tests:
 
-A Wave 5 patch proposal must satisfy all of these conditions:
+~~~bash
+modfactory verify /path/to/repository \
+  --slice-id <slice-id> \
+  --output .modfactory \
+  --allow-project-code \
+  --timeout 120
+~~~
 
-1. Exactly one migration slice is selected.
-2. The slice is a compatibility slice with a recipe.
-3. Recipe confidence is high.
-4. A deterministic transform exists for that recipe.
-5. The target resolves to a safe existing file inside the repository.
-6. Changed files are a subset of the explicit allowlist.
-7. Added + removed lines stay inside the diff budget.
-8. Python output parses successfully when the target is Python.
-9. The proposal remains review-only: no file write, commit, push, or merge.
+## Verification outcomes
 
-Failure of any gate yields `BLOCKED`, not a best-effort patch.
+- PASS — static differential gates pass and opted-in project tests pass before and after.
+- REVIEW — static gates pass, but project code was not executed.
+- FAIL — the patch introduces static evidence regression or breaks tests after a green baseline.
+- BLOCKED — verification cannot fairly attribute an outcome, for example because the baseline already fails.
+
+A PASS still requires human review. It is not merge or deployment authority.
+
+## Generated evidence
+
+Analysis:
+- report.json
+- report.md
+- harness/harness.json
+- harness/baseline.sh
+
+Patch proposal:
+- patch/proposal.json
+- patch/change.diff
+
+Differential verification:
+- verification/verification.json
+- verification/verification.md
+
+## Current deterministic transforms
+
+Wave 5/6 can currently propose and verify:
+
+- distutils.core imports → setuptools
+- simple collections ABC imports/attribute references → collections.abc
+
+Semantic migrations such as general imp → importlib remain BLOCKED until a transform can be encoded and verified without semantic guessing.
+
+## Safety boundaries for test execution
+
+Discovered project commands are not executed by default. Even with --allow-project-code:
+
+- execution happens only in temporary copies;
+- shell metacharacters such as pipes, redirections, &&, command substitution, and semicolons are blocked;
+- commands have a timeout;
+- only discovered test commands are considered;
+- original repository files are never modified.
+
+For untrusted third-party repositories, run the opt-in test phase inside a dedicated sandbox/container with restricted credentials and network access.
 
 ## Architecture
 
-- `scanner.py` — repository inventory and modernization evidence.
-- `history.py` — churn and ownership evidence.
-- `architecture.py` — internal dependency graph, cycles, hubs and upgrade boundaries.
-- `commands.py` — evidence-backed baseline command discovery.
-- `harness.py` — non-executing baseline harness generation.
-- `recipes.py` — deterministic migration recipe catalog.
-- `slices.py` — constrained migration slices and verification gates.
-- `patches.py` — one-slice patch proposal engine and scope/diff-budget gates.
-- `models.py` — structured snapshot model.
-- `planner.py` — staged modernization plan.
-- `report.py` — JSON + Markdown evidence and harness artifacts.
-- `cli.py` — CLI and CI exit codes.
+- scanner.py — repository inventory and modernization evidence.
+- history.py — churn and ownership evidence.
+- architecture.py — dependency graph, cycles, hubs, upgrade boundaries.
+- commands.py — evidence-backed command discovery.
+- harness.py — non-executing baseline harness generation.
+- recipes.py — migration recipe catalog.
+- slices.py — constrained migration slices.
+- patches.py — one-slice patch proposal engine.
+- verification.py — temporary-copy differential verification and optional project tests.
+- models.py — structured evidence models.
+- planner.py — staged modernization plan.
+- report.py — evidence reports.
+- cli.py — CLI.
 
 ## Engineering waves
 
@@ -123,11 +132,11 @@ Failure of any gate yields `BLOCKED`, not a best-effort patch.
 3. ✅ Migration Recipe Engine.
 4. ✅ Baseline command discovery + test harness generation.
 5. ✅ Constrained one-slice Patch Proposal Engine.
-6. Differential verification: before/after behavior, tests, performance and errors.
+6. ✅ Differential Verification Engine.
 7. LLM/B300 layer for very large repositories and high-volume evaluation.
 
 ## Principle
 
-**Access to code is not authority to merge. Generation is not evidence.**
+**Generation is not evidence. Evidence is not authority.**
 
-Every automated change must earn approval by strengthening the evidence chain.
+A change can move toward approval only when its evidence becomes stronger, but merge and deployment remain separate human-controlled consequences.
