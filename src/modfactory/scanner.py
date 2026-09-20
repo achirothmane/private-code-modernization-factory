@@ -346,7 +346,7 @@ def _npm_dependency_version(payload: dict[str, object], package: str) -> str | N
 
 
 def _semver_major(version: str) -> int | None:
-    match = re.search(r"(?<!\\d)(\\d+)(?:\\.\\d+)?(?:\\.\\d+)?", version)
+    match = re.search(r"(?<!\d)(\d+)(?:\.\d+)?(?:\.\d+)?", version)
     return int(match.group(1)) if match else None
 
 
