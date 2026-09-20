@@ -97,8 +97,9 @@ def _path_distance(target: Path, candidate: Path) -> int:
 
 
 def _related_tests(root: Path, snapshot: RepoSnapshot, target: Path) -> list[Path]:
+    code_extensions = {".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".go", ".rs", ".rb", ".php", ".cs", ".sh"}
     candidates = [root / rel for rel in snapshot.test_files]
-    candidates = [p for p in candidates if p.is_file()]
+    candidates = [p for p in candidates if p.is_file() and p.suffix.lower() in code_extensions]
     candidates.sort(key=lambda p: (_path_distance(target, p), len(p.as_posix())))
     return candidates[:MAX_RELATED_TESTS]
 
