@@ -619,7 +619,11 @@ def score_model_response(
         "task_id": task_id,
         "provider": request.get("provider"),
         "model": request.get("model"),
+        "provider_model_returned": response.get("provider_model_returned"),
+        "provider_request_id": response.get("provider_request_id"),
         "metrics": metrics,
+        "metrics_source": response.get("metrics_source"),
+
         "allow_project_code": allow_project_code,
         "original_repository_modified": False,
         "status": "FAIL",
