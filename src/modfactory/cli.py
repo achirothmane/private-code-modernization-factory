@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .benchmark import benchmark_corpus, write_benchmark
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
+from .model_eval import build_model_evaluation_plan, write_model_evaluation_plan
 from .report import write_report
 from .scanner import scan_repository
 from .verification import build_differential_verification, write_verification
@@ -49,7 +50,16 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--output", default=".modfactory", help="Output directory")
     bench.add_argument("--diff-budget", type=int, default=DEFAULT_DIFF_BUDGET,
                        help="Maximum added+removed lines allowed when probing deterministic proposals")
-    for command_parser in (analyze, propose, verify, bench):
+
+    eval_plan = sub.add_parser(
+        "eval-plan",
+        help="Build a context-minimized, non-executing model evaluation plan for semantic migration tasks",
+    )
+    eval_plan.add_argument("repository", help="Path to repository")
+    eval_plan.add_argument("--output", default=".modfactory", help="Output directory")
+    eval_plan.add_argument("--diff-budget", type=int, default=DEFAULT_DIFF_BUDGET,
+                           help="Maximum added+removed lines allowed when probing deterministic proposals")
+    for command_parser in (analyze, propose, verify, bench, eval_plan):
         command_parser.add_argument(
             "--target",
             action="append",
@@ -130,6 +140,25 @@ def main(argv: list[str] | None = None) -> int:
         if result["status"] == "REVIEW":
             return 4
         return 5
+
+    if args.command == "eval-plan":
+        if args.diff_budget < 1:
+            print("--diff-budget must be >= 1", file=sys.stderr)
+            return 2
+        snapshot = scan_repository(args.repository, targets=target_profile)
+        plan = build_model_evaluation_plan(
+            args.repository,
+            snapshot,
+            diff_budget=args.diff_budget,
+        )
+        json_path, jsonl_path, md_path = write_model_evaluation_plan(plan, args.output)
+        print(f"Eligible model tasks: {plan['eligible_tasks']}")
+        print(f"Blocked model tasks: {plan['blocked_tasks']}")
+        print(f"Next compute gate: {plan['compute_policy']['next_gate']}")
+        print(f"JSON: {json_path}")
+        print(f"JSONL: {jsonl_path}")
+        print(f"Markdown: {md_path}")
+        return 0
 
     if args.command == "benchmark":
         if args.diff_budget < 1:
