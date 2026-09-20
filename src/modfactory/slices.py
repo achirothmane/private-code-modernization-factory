@@ -55,6 +55,38 @@ def build_migration_slices(snapshot: RepoSnapshot) -> list[dict[str, object]]:
             "merge_gate": "evidence+human-review",
         })
 
+    for boundary in snapshot.architecture.get("upgrade_boundaries", []):
+        boundary_type = str(boundary.get("type", "architecture"))
+        if boundary_type == "dependency-cycle":
+            paths = [str(p) for p in boundary.get("paths", [])]
+            target = paths[0] if paths else "."
+            slices.append({
+                "id": _slice_id("architecture", target, "dependency-cycle"),
+                "kind": "architecture",
+                "priority": 6,
+                "target": target,
+                "title": "Isolate dependency cycle before broad upgrade",
+                "evidence": str(boundary.get("reason", "dependency cycle detected")),
+                "preconditions": ["Relevant baseline tests are green"],
+                "allowed_changes": paths + ["directly related tests"],
+                "verification": ["cycle is removed or explicitly documented as preserved", "no new dependency cycles are introduced"],
+                "merge_gate": "evidence+human-review",
+            })
+        elif boundary_type == "dependency-hub":
+            target = str(boundary.get("path", "."))
+            slices.append({
+                "id": _slice_id("architecture", target, "dependency-hub"),
+                "kind": "architecture",
+                "priority": 7,
+                "target": target,
+                "title": "Protect dependency hub before migration",
+                "evidence": str(boundary.get("reason", "dependency hub detected")),
+                "preconditions": ["Targeted tests cover callers and callees"],
+                "allowed_changes": [target, "directly related tests"],
+                "verification": ["callers remain compatible", "fan-in/fan-out delta is explained", "no unrelated file changes"],
+                "merge_gate": "evidence+human-review",
+            })
+
     for finding in snapshot.findings:
         if finding.category == "ownership":
             slices.append({

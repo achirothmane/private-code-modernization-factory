@@ -1,27 +1,24 @@
 # Private Code Modernization Factory — MVP
 
-Evidence-first repository modernization analysis. The MVP does **not** modify code automatically. It first determines whether a repository is safe to modernize and produces a staged migration plan with explicit exit criteria.
+Evidence-first repository modernization analysis. The tool does **not** grant an AI authority to rewrite a repository blindly. It first maps risk and architecture, then produces constrained migration slices with explicit verification gates.
 
-## Why this exists
+## Core pipeline
 
-AI can generate large code changes quickly, but large unverified rewrites create hidden operational risk. This project treats modernization as an evidence problem:
+repo → snapshot → blockers → architecture graph → safety gate → migration slices → verification evidence
 
-`repo -> snapshot -> blockers -> safety gate -> staged migration plan -> verification evidence`
+## Current capabilities
 
-The commercial direction is a managed modernization factory: analyze a customer repository, create the safety baseline, execute small migration slices, and deliver reviewable PRs plus evidence.
-
-## Current MVP
-
-- Detects languages and build/dependency manifests.
-- Detects tests and GitHub Actions CI.
-- Detects selected obsolete APIs and deprecated dependency patterns.
-- Flags oversized source files that increase migration blast radius.
-- Analyzes Git history for high-churn/single-owner hotspots.
-- Produces a 0–100 modernization risk score.
-- Produces a BLOCK / REVIEW / PASS gate.
-- Produces staged migration plans and constrained migration slices.
-- Emits JSON and Markdown evidence.
-- Has zero runtime dependencies.
+- Detect languages and build/dependency manifests.
+- Detect tests and GitHub Actions CI.
+- Detect selected obsolete APIs and deprecated dependency patterns.
+- Flag oversized source files that increase migration blast radius.
+- Analyze Git history for high-churn/single-owner hotspots.
+- Build internal Python and JavaScript/TypeScript dependency graphs.
+- Detect dependency cycles and high fan-in/fan-out hubs.
+- Convert architecture boundaries into constrained migration slices.
+- Produce a 0–100 modernization risk score and BLOCK / REVIEW / PASS gate.
+- Emit JSON and Markdown evidence.
+- Zero runtime dependencies.
 
 ## Run
 
@@ -30,42 +27,35 @@ python -m pip install -e .
 modfactory analyze /path/to/repository --output .modfactory
 ```
 
-To make the analyzer usable as a CI gate:
+CI-style gate:
 
 ```bash
 modfactory analyze . --output .modfactory --fail-on high
 ```
 
-## Demo
-
-```bash
-modfactory analyze examples/legacy_app --output demo-report
-cat demo-report/report.md
-```
-
-The included synthetic legacy example intentionally contains compatibility blockers and no tests/CI so the analyzer should block modernization until a safety baseline exists.
-
 ## Architecture
 
-- `scanner.py` — deterministic repository inventory and evidence collection.
-- `history.py` — churn and ownership evidence from Git history.
-- `models.py` — structured findings/snapshot model.
+- `scanner.py` — repository inventory and modernization evidence.
+- `history.py` — churn and ownership evidence.
+- `architecture.py` — internal dependency graph, cycles, hubs and upgrade boundaries.
+- `models.py` — structured snapshot model.
 - `planner.py` — staged modernization plan.
-- `slices.py` — constrained migration slices with explicit change/verification boundaries.
-- `report.py` — JSON + Markdown evidence generation.
-- `cli.py` — command-line interface and CI exit codes.
+- `slices.py` — constrained migration slices and verification gates.
+- `report.py` — JSON + Markdown evidence.
+- `cli.py` — CLI and CI exit codes.
 
-## Next engineering waves
+## Engineering waves
 
-1. Dependency/architecture graph and upgrade-boundary discovery.
-2. Framework/version-specific migration recipes.
-3. Baseline command discovery and test harness generation.
-4. Patch generator constrained to one migration slice at a time.
-5. Differential verification: before/after tests, API behavior, performance and errors.
-6. LLM/B300 layer for very large repositories, long-context architectural reasoning, multi-agent patch proposals, and high-volume evaluation.
+1. ✅ Safety/risk scanner + Git history.
+2. ✅ Dependency/architecture graph + upgrade-boundary discovery.
+3. Framework/version-specific migration recipes.
+4. Baseline command discovery and test harness generation.
+5. Patch generator constrained to one migration slice at a time.
+6. Differential verification: before/after behavior, tests, performance and errors.
+7. LLM/B300 layer for very large repositories and high-volume evaluation.
 
 ## Principle
 
 **Access to code is not authority to merge. Generation is not evidence.**
 
-Every automated change must earn approval by improving the evidence chain.
+Every automated change must earn approval by strengthening the evidence chain.

@@ -5,6 +5,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from .architecture import analyze_architecture
 from .history import analyze_history
 from .models import Finding, RepoSnapshot
 
@@ -161,6 +162,7 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
             score=8,
         ))
 
+    architecture = analyze_architecture(root, source_files)
     history = analyze_history(root)
     for hotspot in history.get("single_owner_hotspots", []):
         findings.append(Finding(
@@ -175,5 +177,5 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
         root=str(root), files=files, lines=lines, languages=dict(languages),
         manifests=sorted(manifests), ci_files=sorted(ci_files),
         test_files=sorted(test_files), source_files=sorted(source_files), findings=findings,
-        history=history,
+        history=history, architecture=architecture,
     )
