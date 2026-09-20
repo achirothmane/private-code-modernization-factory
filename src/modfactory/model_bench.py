@@ -73,6 +73,7 @@ class OpenAICompatibleAdapter:
             "messages": messages,
             "temperature": 0,
             "max_tokens": self.max_tokens,
+            "response_format": {"type": "json_object"},
         }
         raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers = {
