@@ -125,7 +125,7 @@ def discover_commands(root: str | Path, snapshot: RepoSnapshot) -> list[dict[str
     tox_ini = _read_text(root / "tox.ini")
     if tox_ini:
         add("test", "tox", "tox.ini", "high", "tox.ini defines the repository's test environments.")
-        for match in re.finditer(r"(?m)^\\s*commands\\s*=\\s*(.+?)\\s*$", tox_ini):
+        for match in re.finditer(r"(?m)^\s*commands\s*=\s*(.+?)\s*$", tox_ini):
             command = match.group(1).strip()
             kind = _kind_for_command(command) or "test"
             add(kind, command, "tox.ini#commands", "high",
