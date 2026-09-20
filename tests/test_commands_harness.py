@@ -50,13 +50,13 @@ class CommandDiscoveryTests(unittest.TestCase):
     def test_legacy_tox_doctest_baseline_is_discovered(self):
         with TemporaryDirectory() as td:
             root = Path(td)
-            (root / "module.py").write_text("VALUE = 1\\n", encoding="utf-8")
-            (root / "setup.py").write_text("from distutils.core import setup\\n", encoding="utf-8")
+            (root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (root / "setup.py").write_text("from distutils.core import setup\n", encoding="utf-8")
             (root / "tox.ini").write_text(
-                "[tox]\\nenvlist = py311\\n\\n[testenv]\\ncommands = python -m doctest -v README.rst\\n",
+                "[tox]\nenvlist = py311\n\n[testenv]\ncommands = python -m doctest -v README.rst\n",
                 encoding="utf-8",
             )
-            (root / "README.rst").write_text("Example\\n=======\\n", encoding="utf-8")
+            (root / "README.rst").write_text("Example\n=======\n", encoding="utf-8")
 
             snap = scan_repository(root)
             commands = discover_commands(root, snap)
