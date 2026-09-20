@@ -18,6 +18,26 @@ def _add_baseline(root: Path) -> None:
 
 
 class PatchProposalTests(unittest.TestCase):
+    def test_deterministic_transform_is_blocked_without_baseline_tests_and_ci(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text(
+                "from collections import MutableMapping\n",
+                encoding="utf-8",
+            )
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+
+            snap = scan_repository(root)
+            target_slice = next(
+                item for item in build_migration_slices(snap)
+                if item.get("recipe", {}).get("id") == "python-collections-abc"
+            )
+            proposal = build_patch_proposal(root, snap, str(target_slice["id"]))
+
+            self.assertEqual(proposal["status"], "BLOCKED")
+            self.assertEqual(proposal["reason"], "baseline-tests-missing")
+            self.assertEqual(proposal["diff"], "")
+
     def test_collections_recipe_produces_single_file_review_only_diff(self):
         with TemporaryDirectory() as td:
             root = Path(td)
