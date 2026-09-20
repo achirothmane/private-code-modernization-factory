@@ -75,6 +75,7 @@ def build_model_request(
         "provider": provider,
         "model": model,
         "task_sha256": _sha256_text(task_json),
+        "task": task,
         "messages": [
             {
                 "role": "system",
@@ -141,11 +142,64 @@ def _metric_number(value: object, *, integer: bool = False) -> tuple[object | No
     return float(value), None
 
 
+def validate_request_integrity(request: dict[str, object]) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    task = request.get("task")
+    if not isinstance(task, dict):
+        return False, ["request-task-missing"]
+    canonical = json.dumps(task, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = _sha256_text(canonical)
+    if request.get("task_sha256") != digest:
+        errors.append("request-task-sha256-mismatch")
+    expected_benchmark = digest[:16]
+    if request.get("benchmark_id") != expected_benchmark:
+        errors.append("request-benchmark-id-mismatch")
+    return not errors, errors
+
+
+def validate_repository_baseline(
+    repository: str | Path,
+    request: dict[str, object],
+) -> tuple[bool, list[dict[str, str]]]:
+    root = Path(repository).resolve()
+    task = request.get("task")
+    if not isinstance(task, dict):
+        return False, [{"path": ".", "reason": "request-task-missing"}]
+    context_files = task.get("context_files", [])
+    if not isinstance(context_files, list):
+        return False, [{"path": ".", "reason": "context-files-invalid"}]
+
+    mismatches: list[dict[str, str]] = []
+    for item in context_files:
+        if not isinstance(item, dict):
+            continue
+        rel = item.get("path")
+        expected = item.get("sha256")
+        if not isinstance(rel, str) or not isinstance(expected, str):
+            mismatches.append({"path": str(rel or "."), "reason": "context-hash-missing"})
+            continue
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            mismatches.append({"path": rel, "reason": "context-path-escapes-root"})
+            continue
+        if not candidate.is_file():
+            mismatches.append({"path": rel, "reason": "context-file-missing"})
+            continue
+        actual = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if actual != expected:
+            mismatches.append({"path": rel, "reason": "context-sha256-mismatch"})
+    return not mismatches, mismatches
+
+
 def validate_response_envelope(
     request: dict[str, object],
     response: dict[str, object],
 ) -> tuple[bool, list[str], dict[str, object]]:
     errors: list[str] = []
+    if response.get("schema_version") != RESPONSE_SCHEMA_VERSION:
+        errors.append("response-schema-version-mismatch")
     for key in ("benchmark_id", "task_id", "provider", "model"):
         if response.get(key) != request.get(key):
             errors.append(f"{key}-mismatch")
@@ -349,12 +403,11 @@ def score_model_response(
     timeout_seconds: int = 120,
 ) -> dict[str, object]:
     root = Path(repository).resolve()
+    request_valid, request_errors = validate_request_integrity(request)
     valid_envelope, envelope_errors, metrics = validate_response_envelope(request, response)
     task_id = str(request.get("task_id", ""))
-    try:
-        user_message = request.get("messages", [])[1]
-        task = json.loads(str(user_message["content"]))
-    except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+    task = request.get("task")
+    if not isinstance(task, dict):
         task = {}
 
     base: dict[str, object] = {
@@ -371,8 +424,22 @@ def score_model_response(
         "gates": {},
         "project_tests": {"executed": False, "before": [], "after": []},
     }
+    if not request_valid:
+        return {
+            **base,
+            "reason": "request-integrity-invalid",
+            "request_errors": request_errors,
+        }
     if not valid_envelope:
         return {**base, "envelope_errors": envelope_errors}
+
+    baseline_valid, baseline_mismatches = validate_repository_baseline(root, request)
+    if not baseline_valid:
+        return {
+            **base,
+            "reason": "repository-baseline-mismatch",
+            "baseline_mismatches": baseline_mismatches,
+        }
 
     diff = str(response.get("unified_diff", ""))
     diff_info = inspect_unified_diff(diff)
