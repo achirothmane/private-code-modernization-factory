@@ -55,9 +55,11 @@ modfactory benchmark /path/to/corpus \
 
 Wave 7A measures repository size, analysis time, findings, recipes, migration slices, deterministic proposal coverage, blocked reasons, safety blockers, semantic escalations, architecture pressure, and long-context evaluation candidates.
 
-The workload bands are screening heuristics, not hardware requirements. LONG_CONTEXT_EVALUATION_CANDIDATE does not mean a B300 is required.
+The workload bands are screening heuristics, not hardware requirements. LONG_CONTEXT_EVALUATION_CANDIDATE requires both large repository scale and a genuine semantic escalation; architecture pressure alone does not trigger model escalation.
 
-The benchmark deliberately reports b300_rental_recommended = false and b300_decision = NOT_JUSTIFIED_BY_WAVE_7A. A B300-class rental can only be considered after a separate model benchmark measures quality, latency, throughput, and total cost against smaller hardware or cloud alternatives.
+The reproducible 2026-09-20 corpus run analyzed 10/10 pinned public repositories: 6,326 source files and 2,195,930 lines. It found 17 compatibility slices, 12 semantic escalations, 5 safety blockers, 136 architecture slices, and 0 LONG_CONTEXT_EVALUATION_CANDIDATE cases. B300 rental is therefore not justified by the current Wave 7A evidence. The exact report is stored under benchmarks/results/.
+
+A B300-class rental can only be considered after a separate model benchmark measures quality, latency, throughput, and total cost against smaller hardware or cloud alternatives.
 
 ## Reproducible public corpus
 
@@ -68,10 +70,11 @@ benchmarks/fetch_corpus.py fetches those exact commits without running project c
 ## Escalation tiers
 
 - NO_MODERNIZATION_SIGNAL — no compatibility or architecture migration slice detected.
+- ARCHITECTURE_REVIEW — architecture pressure exists, but no semantic migration signal justifies model escalation.
 - DETERMINISTIC — detected compatibility work is covered by deterministic transforms.
 - SAFETY_FIRST — tests, CI, or test-command evidence must be repaired before adding model intelligence.
 - SEMANTIC_REVIEW_CANDIDATE — migration semantics exceed deterministic transforms.
-- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with semantic or architecture migration work; this only authorizes a model benchmark, not expensive compute rental.
+- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work; this only authorizes a model benchmark, not expensive compute rental.
 
 ## Current deterministic transforms
 
@@ -115,7 +118,7 @@ General imp → importlib, node-sass → sass, HTTP-client replacement, React ro
 5. ✅ Constrained one-slice Patch Proposal Engine.
 6. ✅ Differential Verification Engine.
 7A. ✅ Scale & Escalation Benchmark.
-7B. Model/compute benchmark only for cases that survive 7A.
+7B. Model/compute benchmark only for semantic cases that survive 7A; start with ordinary/smaller model configurations before considering B300-class compute.
 
 ## Principle
 

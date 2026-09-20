@@ -2,13 +2,6 @@ name: Static Scale Benchmark
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - wave7a-scale-benchmark
-    paths:
-      - ".github/workflows/benchmark.yml"
-      - "benchmarks/**"
-      - "src/modfactory/**"
 
 permissions:
   contents: read
