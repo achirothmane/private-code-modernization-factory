@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "wave": "7D",
+  "title": "Explicit Target Profile + Context Locality Gate",
+  "workflow_run_id": 35485108170,
+  "artifact_id": 10597288372,
+  "corpus": {
+    "repositories_analyzed": 5,
+    "source_files": 1040,
+    "lines": 980491,
+    "semantic_escalations": 4
+  },
+  "target_case": {
+    "repo": "h2oai/wave",
+    "commit": "fff04af6d92584d75ce7e946d2c449230461dfcb",
+    "target_profile": {
+      "react-dom": "18"
+    },
+    "scanned_lines": 819615,
+    "semantic_tasks": 4,
+    "safety_blockers": 0,
+    "tier": "LOCAL_MODEL_EVALUATION_CANDIDATE"
+  },
+  "context_tasks": [
+    {
+      "target": "ide/src/index.tsx",
+      "characters": 13898,
+      "band": "small",
+      "requires_full_repository_context": false
+    },
+    {
+      "target": "ui/src/index.tsx",
+      "characters": 21314,
+      "band": "small",
+      "requires_full_repository_context": false
+    },
+    {
+      "target": "ui/src/markdown.tsx",
+      "characters": 25677,
+      "band": "small",
+      "requires_full_repository_context": false
+    },
+    {
+      "target": "ui/src/plot.tsx",
+      "characters": 61303,
+      "band": "small",
+      "requires_full_repository_context": false
+    }
+  ],
+  "max_context_characters": 61303,
+  "full_repository_context_tasks": 0,
+  "compute": {
+    "ordinary_model_benchmark_justified": true,
+    "long_context_model_benchmark_justified": false,
+    "b300_benchmark_justified": false,
+    "b300_rental_recommended": false,
+    "next_gate": "ORDINARY_MODEL_BENCHMARK_FIRST"
+  },
+  "model_inference_run": false,
+  "conclusion": "A real target-defined semantic workload exists, but deterministic context minimization keeps all four tasks local. Repository size does not justify long-context or B300-class compute."
+}

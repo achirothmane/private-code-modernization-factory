@@ -10,6 +10,8 @@ from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal
 from .recipes import build_recipe_instances
 from .scanner import scan_repository
 from .slices import build_migration_slices
+from .targets import merge_targets
+from .model_eval import build_model_evaluation_plan
 
 
 SEMANTIC_ESCALATION_REASONS = {
@@ -50,6 +52,12 @@ def classify_escalation(metrics: dict[str, object]) -> dict[str, object]:
     band = str(metrics.get("workload_band", "small"))
     compatibility = int(metrics.get("compatibility_slices", 0))
 
+    model_eval = metrics.get("model_evaluation", {})
+    if not isinstance(model_eval, dict):
+        model_eval = {}
+    eligible_model_tasks = int(model_eval.get("eligible_tasks", 0))
+    full_repo_context_tasks = int(model_eval.get("full_repository_context_tasks", 0))
+
     if compatibility == 0 and architecture == 0:
         tier = "NO_MODERNIZATION_SIGNAL"
         reason = "No compatibility or architecture migration slice was detected."
@@ -62,22 +70,28 @@ def classify_escalation(metrics: dict[str, object]) -> dict[str, object]:
     elif safety > 0 and semantic == 0 and proposed == 0:
         tier = "SAFETY_FIRST"
         reason = "Verification prerequisites are missing; add baseline tests/CI before adding model intelligence."
-    elif band == "large" and semantic > 0:
+    elif semantic > 0 and eligible_model_tasks > 0 and full_repo_context_tasks == 0:
+        tier = "LOCAL_MODEL_EVALUATION_CANDIDATE"
+        reason = "Genuine semantic migration work survives the gates, but context minimization keeps every eligible task local."
+    elif semantic > 0 and full_repo_context_tasks > 0:
         tier = "LONG_CONTEXT_EVALUATION_CANDIDATE"
-        reason = "Large repository plus genuine semantic migration work may justify a long-context model evaluation."
+        reason = "At least one genuine semantic migration task still requires large context after deterministic context minimization."
     else:
         tier = "SEMANTIC_REVIEW_CANDIDATE"
         reason = "Some migration work is semantic and is not safely covered by deterministic transforms."
+
+    if tier == "LOCAL_MODEL_EVALUATION_CANDIDATE":
+        b300_gate = "ORDINARY_MODEL_BENCHMARK_FIRST"
+    elif tier == "LONG_CONTEXT_EVALUATION_CANDIDATE":
+        b300_gate = "MEASURE_LONG_CONTEXT_MODEL_LIMITS_FIRST"
+    else:
+        b300_gate = "NOT_APPLICABLE"
 
     return {
         "tier": tier,
         "reason": reason,
         "b300_rental_recommended": False,
-        "b300_gate": (
-            "MEASURE_MODEL_THROUGHPUT_COST_FIRST"
-            if tier == "LONG_CONTEXT_EVALUATION_CANDIDATE"
-            else "NOT_APPLICABLE"
-        ),
+        "b300_gate": b300_gate,
         "note": (
             "Current corpus evidence measures repository pressure only. Repository size alone is not evidence "
             "that B300 is economically or technically required."
@@ -92,10 +106,12 @@ def benchmark_repository(
     source_repo: str | None = None,
     commit: str | None = None,
     diff_budget: int = DEFAULT_DIFF_BUDGET,
+    targets: dict[str, str] | None = None,
 ) -> dict[str, object]:
     root = Path(path).resolve()
     started = time.perf_counter()
-    snapshot = scan_repository(root)
+    target_profile = dict(targets or {})
+    snapshot = scan_repository(root, targets=target_profile)
     commands = discover_commands(root, snapshot)
     recipes = build_recipe_instances(snapshot.findings)
     slices = build_migration_slices(snapshot)
@@ -139,12 +155,31 @@ def benchmark_repository(
     )
     edges = int(snapshot.architecture.get("edge_count", 0))
     band = workload_band(len(snapshot.source_files), snapshot.lines, edges)
+    eval_plan = build_model_evaluation_plan(root, snapshot, diff_budget=diff_budget)
+    eval_tasks = list(eval_plan.get("tasks", []))
+    context_bands = Counter(str(task.get("context_band", "unknown")) for task in eval_tasks)
+    max_context_characters = max(
+        (int(task.get("context_characters", 0)) for task in eval_tasks),
+        default=0,
+    )
+    full_repository_context_tasks = sum(
+        1 for task in eval_tasks if bool(task.get("requires_full_repository_context"))
+    )
+    model_evaluation = {
+        "eligible_tasks": int(eval_plan.get("eligible_tasks", 0)),
+        "blocked_tasks": int(eval_plan.get("blocked_tasks", 0)),
+        "context_bands": dict(sorted(context_bands.items())),
+        "max_context_characters": max_context_characters,
+        "full_repository_context_tasks": full_repository_context_tasks,
+        "next_gate": eval_plan.get("compute_policy", {}).get("next_gate"),
+    }
 
     metrics: dict[str, object] = {
         "name": name or root.name,
         "path": str(root),
         "source_repo": source_repo,
         "commit": commit,
+        "target_profile": target_profile,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
         "files": snapshot.files,
         "lines": snapshot.lines,
@@ -170,6 +205,7 @@ def benchmark_repository(
         "dependency_cycles": len(snapshot.architecture.get("cycles", [])),
         "workload_band": band,
         "proposal_records": proposal_records,
+        "model_evaluation": model_evaluation,
     }
     metrics["escalation"] = classify_escalation(metrics)
     return metrics
@@ -195,8 +231,10 @@ def benchmark_corpus(
     *,
     manifest_path: str | Path | None = None,
     diff_budget: int = DEFAULT_DIFF_BUDGET,
+    targets: dict[str, str] | None = None,
 ) -> dict[str, object]:
     root = Path(corpus_root).resolve()
+    global_targets = dict(targets or {})
     entries = _load_manifest(manifest_path, root)
     repositories: list[dict[str, object]] = []
     errors: list[dict[str, str]] = []
@@ -222,6 +260,10 @@ def benchmark_corpus(
                     source_repo=str(entry.get("repo") or "") or None,
                     commit=str(entry.get("commit") or "") or None,
                     diff_budget=diff_budget,
+                    targets=merge_targets(
+                        global_targets,
+                        entry.get("targets") if isinstance(entry.get("targets"), dict) else None,
+                    ),
                 )
             )
         except Exception as exc:
@@ -249,7 +291,8 @@ def benchmark_corpus(
     )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "global_target_profile": global_targets,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
         "repositories_requested": len(entries),
         "repositories_analyzed": len(repositories),
@@ -304,15 +347,16 @@ def render_benchmark_markdown(result: dict[str, object]) -> str:
         "",
         "## Repositories",
         "",
-        "| Repository | Band | Files | Lines | Compat | Proposed | Semantic | Safety | Escalation |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Repository | Targets | Band | Files | Lines | Compat | Proposed | Semantic | Safety | Escalation |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for item in result["repositories"]:
         esc = item.get("escalation", {})
         lines.append(
-            f"| {item['name']} | {item['workload_band']} | {item['source_files']} | "
-            f"{item['lines']} | {item['compatibility_slices']} | {item['patch_proposals']} | "
-            f"{item['semantic_escalations']} | {item['safety_blockers']} | {esc.get('tier')} |"
+            f"| {item['name']} | {item.get('target_profile') or '-'} | {item['workload_band']} | "
+            f"{item['source_files']} | {item['lines']} | {item['compatibility_slices']} | "
+            f"{item['patch_proposals']} | {item['semantic_escalations']} | "
+            f"{item['safety_blockers']} | {esc.get('tier')} |"
         )
 
     errors = result.get("errors", [])

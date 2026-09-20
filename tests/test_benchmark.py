@@ -64,8 +64,44 @@ class BenchmarkTests(unittest.TestCase):
 
             self.assertEqual(result["patch_proposals"], 0)
             self.assertGreaterEqual(result["semantic_escalations"], 1)
-            self.assertEqual(result["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
+            self.assertEqual(result["escalation"]["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+            self.assertEqual(result["escalation"]["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
             self.assertFalse(result["escalation"]["b300_rental_recommended"])
+
+    def test_manifest_target_turns_react17_into_explicit_react18_migration(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "index.js").write_text(
+                "import ReactDOM from 'react-dom';\nReactDOM.render(<App />, document.getElementById('root'));\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "index.test.js").write_text("module.exports = true\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"test": "node src/index.test.js"},
+                    "dependencies": {"react": "^17.0.2", "react-dom": "^17.0.2"},
+                }),
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n      - run: npm test\n",
+                encoding="utf-8",
+            )
+
+            no_target = benchmark_repository(root, name="react17")
+            self.assertEqual(no_target["semantic_escalations"], 0)
+
+            targeted = benchmark_repository(
+                root,
+                name="react18-target",
+                targets={"react-dom": "18"},
+            )
+            self.assertGreaterEqual(targeted["semantic_escalations"], 1)
+            self.assertEqual(targeted["target_profile"], {"react-dom": "18"})
+            self.assertEqual(targeted["escalation"]["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+            self.assertEqual(targeted["escalation"]["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
 
     def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
         result = classify_escalation({
@@ -80,7 +116,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result["b300_gate"], "NOT_APPLICABLE")
         self.assertFalse(result["b300_rental_recommended"])
 
-    def test_large_semantic_pressure_only_marks_long_context_evaluation_candidate(self):
+    def test_large_repo_is_not_long_context_when_semantic_tasks_localize(self):
         result = classify_escalation({
             "patch_proposals": 0,
             "semantic_escalations": 3,
@@ -88,9 +124,32 @@ class BenchmarkTests(unittest.TestCase):
             "architecture_slices": 4,
             "compatibility_slices": 3,
             "workload_band": "large",
+            "model_evaluation": {
+                "eligible_tasks": 3,
+                "full_repository_context_tasks": 0,
+                "max_context_characters": 65000,
+            },
+        })
+        self.assertEqual(result["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+        self.assertEqual(result["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
+        self.assertFalse(result["b300_rental_recommended"])
+
+    def test_long_context_requires_task_level_context_evidence(self):
+        result = classify_escalation({
+            "patch_proposals": 0,
+            "semantic_escalations": 3,
+            "safety_blockers": 0,
+            "architecture_slices": 4,
+            "compatibility_slices": 3,
+            "workload_band": "large",
+            "model_evaluation": {
+                "eligible_tasks": 3,
+                "full_repository_context_tasks": 1,
+                "max_context_characters": 420000,
+            },
         })
         self.assertEqual(result["tier"], "LONG_CONTEXT_EVALUATION_CANDIDATE")
-        self.assertEqual(result["b300_gate"], "MEASURE_MODEL_THROUGHPUT_COST_FIRST")
+        self.assertEqual(result["b300_gate"], "MEASURE_LONG_CONTEXT_MODEL_LIMITS_FIRST")
         self.assertFalse(result["b300_rental_recommended"])
 
     def test_corpus_report_aggregates_and_writes_artifacts(self):

@@ -1,4 +1,4 @@
-name: Wave 7C Real Semantic Benchmark
+name: Wave 7D Target Profile Benchmark
 
 on:
   workflow_dispatch:
@@ -23,9 +23,16 @@ jobs:
           modfactory benchmark .semantic-corpus \
             --manifest benchmarks/semantic-corpus.json \
             --output semantic-benchmark-results
+      - name: Build Wave 7D model evaluation plan
+        run: |
+          modfactory eval-plan .semantic-corpus/h2oai-wave-reactdom \
+            --target react-dom=18 \
+            --output wave7d-model-eval
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: modfactory-wave7c-real-semantic
-          path: semantic-benchmark-results/benchmark/
+          name: modfactory-wave7d-target-profile
+          path: |
+            semantic-benchmark-results/benchmark/
+            wave7d-model-eval/model-eval/
           if-no-files-found: error

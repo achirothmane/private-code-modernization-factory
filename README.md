@@ -6,7 +6,7 @@ The tool does not grant an AI authority to rewrite, merge, or deploy a repositor
 
 ## Core pipeline
 
-repo → snapshot → evidence refinement → target compatibility → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → scale/escalation benchmark → human review
+repo → explicit target profile → snapshot → evidence refinement → target compatibility → blockers → architecture graph → baseline → recipe → migration slice → patch proposal → differential verification → context minimization → model-evaluation plan → human review
 
 ## Commands
 
@@ -50,6 +50,25 @@ modfactory benchmark /path/to/corpus \
   --manifest benchmarks/corpus.json \
   --output benchmark-results
 ~~~
+
+Declare the intended modernization destination explicitly:
+
+~~~bash
+modfactory analyze /path/to/repository \
+  --target react-dom=18 \
+  --target python=3.12 \
+  --output .modfactory
+~~~
+
+Build a context-minimized model evaluation dataset without invoking a model:
+
+~~~bash
+modfactory eval-plan /path/to/repository \
+  --target react-dom=18 \
+  --output model-eval-results
+~~~
+
+Supported explicit targets currently include `react-dom`, `spring-boot`, and `python`. Corpus manifests can also define a different `targets` object per repository.
 
 ## Wave 7A: Scale & Escalation Benchmark
 
@@ -102,6 +121,39 @@ The apparent semantic count moved **4 → 0** after target compatibility was add
 
 The three remaining compatibility cases are real node-sass/imp evidence, but they are blocked by missing verification prerequisites rather than semantic ambiguity. The correct next step for those cases is baseline/test/CI enablement, not an LLM.
 
+## Wave 7D: Explicit Target Profile + Context Locality Gate
+
+Wave 7D fixes a deeper ambiguity: the current dependency version is not the same thing as the client's intended modernization destination.
+
+For example, `ReactDOM.render` is valid evidence in a React 17 repository but is not a required migration until the intended target is React 18+. The same principle applies to Python runtime removals and Spring Boot 3 / Jakarta transitions.
+
+Wave 7D adds explicit target profiles to analyze, propose, verify, benchmark, and eval-plan. The 5-repository semantic corpus now declares `{"react-dom": "18"}` for the pinned h2oai/wave commit.
+
+That target-defined run produced a genuine semantic workload:
+
+- repositories analyzed: 5 / 5
+- source files: 1,040
+- lines: 980,491
+- h2oai/wave semantic escalations: 4
+- h2oai/wave safety blockers: 0
+- eligible model-evaluation tasks: 4
+- B300 rental recommended: false
+
+The first classifier called h2oai/wave a long-context candidate because the repository contains 819,615 scanned lines. The Context Minimization Gate then constructed task-specific evidence bundles:
+
+- `ide/src/index.tsx`: 13,898 characters
+- `ui/src/index.tsx`: 21,314 characters
+- `ui/src/markdown.tsx`: 25,677 characters
+- `ui/src/plot.tsx`: 61,303 characters
+
+All four bundles are classified `small`; none requires full-repository context. The final tier is therefore **LOCAL_MODEL_EVALUATION_CANDIDATE**, with the next gate **ORDINARY_MODEL_BENCHMARK_FIRST**.
+
+This falsifies the stronger compute claim:
+
+**large repository != large task context != B300 requirement**
+
+No model was invoked in Wave 7D. The next wave must compare ordinary-model outputs on the exact same four tasks before any long-context or B300-class experiment is considered.
+
 ## Compute gate
 
 Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
@@ -109,20 +161,21 @@ Repository size, legacy syntax, or an expensive-looking migration never justifie
 A model benchmark is allowed only after a genuine semantic candidate survives:
 1. source-level evidence refinement;
 2. usage evidence;
-3. target-version / target-stack compatibility;
-4. verification prerequisites.
+3. explicit or inferred target-version / target-stack compatibility;
+4. verification prerequisites;
+5. context minimization.
 
-A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and measured quality, latency, throughput, or total cost can plausibly improve.
+A long-context benchmark additionally requires task-level evidence that the minimized context is still large. A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and measured quality, latency, throughput, or total cost can plausibly improve.
 
 Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 
 ## Reproducible corpora
 
 - benchmarks/corpus.json — broad 10-repository Wave 7A/7B corpus.
-- benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage and target-context falsification.
+- benchmarks/semantic-corpus.json — 5 repositories selected for real source-level legacy usage; Wave 7D also carries per-repository explicit modernization targets.
 - benchmarks/fetch_corpus.py — fetches exact pinned commits without executing target project code.
 - .github/workflows/benchmark.yml — manual broad benchmark.
-- .github/workflows/semantic-benchmark.yml — manual Wave 7C benchmark.
+- .github/workflows/semantic-benchmark.yml — manual Wave 7C/7D target-aware benchmark plus model-evaluation-plan artifact.
 
 Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
@@ -132,8 +185,9 @@ Artifacts are uploaded even when a corpus item fails, preserving diagnostic evid
 - ARCHITECTURE_REVIEW — architecture pressure exists, but no semantic migration signal justifies model escalation.
 - DETERMINISTIC — detected compatibility work is covered by deterministic transforms.
 - SAFETY_FIRST — tests, CI, or test-command evidence must be repaired before model intelligence.
-- SEMANTIC_REVIEW_CANDIDATE — a genuine semantic migration exceeds deterministic transforms after context gates.
-- LONG_CONTEXT_EVALUATION_CANDIDATE — large repository scale coexists with genuine semantic migration work after context gates; this authorizes only a model benchmark, never automatic B300 rental.
+- SEMANTIC_REVIEW_CANDIDATE — semantic work exists but is not yet eligible for model evaluation.
+- LOCAL_MODEL_EVALUATION_CANDIDATE — semantic work survives all gates and deterministic context minimization keeps the model task local; benchmark an ordinary model first.
+- LONG_CONTEXT_EVALUATION_CANDIDATE — at least one eligible semantic task remains large after context minimization; this authorizes only a long-context model benchmark, never automatic B300 rental.
 
 ## Current deterministic transforms
 
@@ -154,6 +208,7 @@ General imp → importlib remains blocked until its semantics can be encoded and
 ## Architecture
 
 - scanner.py — evidence-refined, target-aware repository modernization signals.
+- targets.py — explicit modernization target parsing and per-repository target overrides.
 - history.py — churn and ownership evidence.
 - architecture.py — dependency graph, cycles, hubs, upgrade boundaries.
 - commands.py — evidence-backed command discovery.
@@ -162,7 +217,8 @@ General imp → importlib remains blocked until its semantics can be encoded and
 - slices.py — constrained migration slices.
 - patches.py — one-slice patch proposal engine.
 - verification.py — temporary-copy differential verification.
-- benchmark.py — corpus scale, deterministic coverage, and escalation measurement.
+- benchmark.py — corpus scale, deterministic coverage, context-locality, and escalation measurement.
+- model_eval.py — context-minimized, non-executing model evaluation task generation.
 - models.py — structured evidence models.
 - planner.py — staged modernization plan.
 - report.py — evidence reports.
@@ -179,10 +235,11 @@ General imp → importlib remains blocked until its semantics can be encoded and
 7A. ✅ Scale & Escalation Benchmark.
 7B. ✅ Evidence Refinement Gate.
 7C. ✅ Real Legacy Evidence Corpus + Target Compatibility Gate.
-7D. Model/compute benchmark only when a genuine semantic candidate survives all current gates.
+7D. ✅ Explicit Target Profile + Model Evaluation Harness + Context Locality Gate.
+7E. Ordinary-model quality benchmark on the exact Wave 7D tasks before any long-context/B300 experiment.
 
 ## Principle
 
-**Generation is not evidence. Evidence is not authority. Legacy syntax is not a migration requirement. Scale is not proof that expensive compute is needed.**
+**Generation is not evidence. Evidence is not authority. Legacy syntax is not a migration requirement. Repository size is not task-context size. Scale is not proof that expensive compute is needed.**
 
 Every escalation must earn its added complexity and cost with stronger evidence and measured improvement.

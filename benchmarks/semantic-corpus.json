@@ -1,13 +1,16 @@
 {
-  "schema_version": 1,
-  "note": "Pinned public repositories selected for real source-level legacy API usage. Wave 7C then applies usage and target-compatibility gates to determine whether the legacy evidence is actually actionable. Static-only; target project code is not executed.",
+  "schema_version": 2,
+  "note": "Pinned public repositories with real source-level legacy usage. Wave 7D adds explicit per-repository modernization targets so current compatibility is distinguished from intended migration compatibility.",
   "repositories": [
     {
       "name": "h2oai-wave-reactdom",
       "repo": "h2oai/wave",
       "commit": "fff04af6d92584d75ce7e946d2c449230461dfcb",
       "path": "h2oai-wave-reactdom",
-      "evidence": "ui and ide source contain ReactDOM.render; package context declares react-dom 17/16, so the final target-compatibility gate suppresses migration escalation"
+      "evidence": "Current ui/ide packages use React 17/16 and ReactDOM.render; explicit modernization target react-dom=18 makes createRoot migration actionable.",
+      "targets": {
+        "react-dom": "18"
+      }
     },
     {
       "name": "stackstorm-st2web-reactdom",

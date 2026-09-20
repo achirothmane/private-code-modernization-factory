@@ -45,7 +45,7 @@ class RecipeTests(unittest.TestCase):
             (root / "tests" / "Test.java").write_text("class Test {}\n", encoding="utf-8")
             (root / ".github" / "workflows").mkdir(parents=True)
             (root / ".github" / "workflows" / "ci.yml").write_text("name: ci\n", encoding="utf-8")
-            snap = scan_repository(root)
+            snap = scan_repository(root, targets={"spring-boot": "3"})
             finding = next(f for f in snap.findings if f.message == "Javax namespace detected")
             recipe = recipe_for_finding(finding)
             self.assertIsNotNone(recipe)
