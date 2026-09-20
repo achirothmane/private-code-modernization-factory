@@ -64,7 +64,8 @@ class BenchmarkTests(unittest.TestCase):
 
             self.assertEqual(result["patch_proposals"], 0)
             self.assertGreaterEqual(result["semantic_escalations"], 1)
-            self.assertEqual(result["escalation"]["tier"], "SEMANTIC_REVIEW_CANDIDATE")
+            self.assertEqual(result["escalation"]["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
+            self.assertEqual(result["escalation"]["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
             self.assertFalse(result["escalation"]["b300_rental_recommended"])
 
     def test_manifest_target_turns_react17_into_explicit_react18_migration(self):
