@@ -31,7 +31,7 @@ class ModelEvaluationPlanTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-    def test_explicit_react18_target_produces_one_context_minimized_task(self):
+    def test_explicit_react18_target_is_consumed_by_deterministic_transform_before_model_eval(self):
         with TemporaryDirectory() as td:
             root = Path(td)
             self._react17_repo(root)
@@ -39,17 +39,10 @@ class ModelEvaluationPlanTests(unittest.TestCase):
 
             plan = build_model_evaluation_plan(root, snapshot)
 
-            self.assertEqual(plan["eligible_tasks"], 1, plan)
+            self.assertEqual(plan["eligible_tasks"], 0, plan)
             self.assertEqual(plan["blocked_tasks"], 0)
-            task = plan["tasks"][0]
-            self.assertEqual(task["target_profile"], {"react-dom": "18"})
-            self.assertEqual(task["context_band"], "small")
-            self.assertFalse(task["requires_full_repository_context"])
-            roles = {item["role"] for item in task["context_files"]}
-            self.assertIn("target", roles)
-            self.assertIn("manifest", roles)
-            self.assertIn("related-test", roles)
-            self.assertEqual(plan["compute_policy"]["next_gate"], "RUN_ORDINARY_MODEL_BENCHMARK")
+            self.assertEqual(plan["tasks"], [])
+            self.assertEqual(plan["compute_policy"]["next_gate"], "NO_ELIGIBLE_SEMANTIC_TASK")
             self.assertFalse(plan["compute_policy"]["invoke_model"])
             self.assertFalse(plan["compute_policy"]["rent_b300"])
 
@@ -78,7 +71,7 @@ class ModelEvaluationPlanTests(unittest.TestCase):
             self.assertTrue(json_path.exists())
             self.assertTrue(jsonl_path.exists())
             self.assertTrue(md_path.exists())
-            self.assertEqual(len(jsonl_path.read_text(encoding="utf-8").strip().splitlines()), 1)
+            self.assertEqual(jsonl_path.read_text(encoding="utf-8"), "")
             self.assertIn("No model was invoked", md_path.read_text(encoding="utf-8"))
 
 
