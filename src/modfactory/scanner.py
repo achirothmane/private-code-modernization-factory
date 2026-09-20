@@ -80,6 +80,7 @@ JAKARTA_MIGRATION_PREFIXES = (
 
 REACTDOM_RENDER_PATTERN = re.compile(r"\bReactDOM\.render\s*\(")
 JAVA_IMPORT_PATTERN = re.compile(r"(?m)^\s*import\s+(javax\.[A-Za-z0-9_$.]+)\s*;")
+NPM_SOURCE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
 
 def _is_manifest(path: Path) -> bool:
