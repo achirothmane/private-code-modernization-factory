@@ -31,6 +31,7 @@ class RepoSnapshot:
     findings: list[Finding] = field(default_factory=list)
     history: dict[str, Any] = field(default_factory=dict)
     architecture: dict[str, Any] = field(default_factory=dict)
+    target_profile: dict[str, str] = field(default_factory=dict)
 
     @property
     def risk_score(self) -> int:
