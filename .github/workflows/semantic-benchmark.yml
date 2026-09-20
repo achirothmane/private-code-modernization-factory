@@ -1,6 +1,13 @@
-name: Wave 7D Target Profile Benchmark
+name: Wave 7E Deterministic React Benchmark
 
 on:
+  push:
+    branches:
+      - wave7e-ordinary-model-benchmark
+    paths:
+      - ".github/workflows/semantic-benchmark.yml"
+      - "benchmarks/**"
+      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
@@ -23,16 +30,22 @@ jobs:
           modfactory benchmark .semantic-corpus \
             --manifest benchmarks/semantic-corpus.json \
             --output semantic-benchmark-results
-      - name: Build Wave 7D model evaluation plan
+      - name: Build post-deterministic model evaluation plan
         run: |
           modfactory eval-plan .semantic-corpus/h2oai-wave-reactdom \
             --target react-dom=18 \
-            --output wave7d-model-eval
+            --output wave7e-model-eval
+      - name: Export Wave 7E real deterministic proposals
+        run: |
+          python benchmarks/export_wave7e_react_proposals.py \
+            .semantic-corpus/h2oai-wave-reactdom \
+            wave7e-react-proposals
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: modfactory-wave7d-target-profile
+          name: modfactory-wave7e-deterministic-react
           path: |
             semantic-benchmark-results/benchmark/
-            wave7d-model-eval/model-eval/
+            wave7e-model-eval/model-eval/
+            wave7e-react-proposals/
           if-no-files-found: error
