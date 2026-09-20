@@ -98,10 +98,12 @@ class BenchmarkTests(unittest.TestCase):
                 name="react18-target",
                 targets={"react-dom": "18"},
             )
-            self.assertGreaterEqual(targeted["semantic_escalations"], 1)
+            self.assertEqual(targeted["semantic_escalations"], 0)
+            self.assertEqual(targeted["patch_proposals"], 1)
             self.assertEqual(targeted["target_profile"], {"react-dom": "18"})
-            self.assertEqual(targeted["escalation"]["tier"], "LOCAL_MODEL_EVALUATION_CANDIDATE")
-            self.assertEqual(targeted["escalation"]["b300_gate"], "ORDINARY_MODEL_BENCHMARK_FIRST")
+            self.assertEqual(targeted["model_evaluation"]["eligible_tasks"], 0)
+            self.assertEqual(targeted["escalation"]["tier"], "DETERMINISTIC")
+            self.assertEqual(targeted["escalation"]["b300_gate"], "NOT_APPLICABLE")
 
     def test_architecture_only_pressure_does_not_trigger_llm_escalation(self):
         result = classify_escalation({
