@@ -148,6 +148,38 @@ class ModelBenchmarkTests(unittest.TestCase):
             self.assertEqual(score["reason"], "allowed-scope-violation")
             self.assertEqual(score["gates"]["scope_violations"], ["README.md"])
 
+    def test_repository_change_after_request_creation_blocks_scoring(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _, request = self._request_repo(root)
+            response = self._response(request, self._valid_diff(root))
+            (root / "test" / "a.test.js").write_text(
+                "// changed after benchmark request\n",
+                encoding="utf-8",
+            )
+
+            score = score_model_response(root, request, response)
+
+            self.assertEqual(score["status"], "FAIL")
+            self.assertEqual(score["reason"], "repository-baseline-mismatch")
+            self.assertEqual(
+                score["baseline_mismatches"][0]["reason"],
+                "context-sha256-mismatch",
+            )
+
+    def test_task_tampering_after_request_creation_blocks_scoring(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _, request = self._request_repo(root)
+            response = self._response(request, self._valid_diff(root))
+            request["task"]["objective"] = "tampered objective"
+
+            score = score_model_response(root, request, response)
+
+            self.assertEqual(score["status"], "FAIL")
+            self.assertEqual(score["reason"], "request-integrity-invalid")
+            self.assertIn("request-task-sha256-mismatch", score["request_errors"])
+
     def test_response_metrics_must_be_provider_values_or_null(self):
         with TemporaryDirectory() as td:
             root = Path(td)
