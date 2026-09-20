@@ -38,11 +38,11 @@ jobs:
         run: |
           set -euo pipefail
           curl -L --fail --retry 3 \
-            -o llama-v0.4.1-bin-ubuntu-x64.tar.gz \
-            https://github.com/ggml-org/llama.cpp/releases/download/v0.4.1/llama-v0.4.1-bin-ubuntu-x64.tar.gz
-          echo "080b3e799cb774faf9fe44ef1b02601e5066bc1e5c426b5ae8ff68e1c1f708e8  llama-v0.4.1-bin-ubuntu-x64.tar.gz" | sha256sum -c -
+            -o llama-b11057-bin-ubuntu-x64.tar.gz \
+            https://github.com/ggml-org/llama.cpp/releases/download/b11057/llama-b11057-bin-ubuntu-x64.tar.gz
+          echo "fa7532f45d5b1c47696afb1cb7c334692262404c81ecc8e28b14dc273796289f  llama-b11057-bin-ubuntu-x64.tar.gz" | sha256sum -c -
           mkdir -p .llama
-          tar -xzf llama-v0.4.1-bin-ubuntu-x64.tar.gz -C .llama
+          tar -xzf llama-b11057-bin-ubuntu-x64.tar.gz -C .llama
           find .llama -name llama-server -type f -print
 
       - name: Download pinned Qwen2.5-Coder 3B Q4_K_M
