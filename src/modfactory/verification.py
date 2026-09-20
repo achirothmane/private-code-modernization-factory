@@ -207,8 +207,8 @@ def build_differential_verification(
         if not ok:
             return {**base, "reason": "after-tree-materialization-failed", "detail": materialize_error}
 
-        before_snapshot = scan_repository(before_root)
-        after_snapshot = scan_repository(after_root)
+        before_snapshot = scan_repository(before_root, targets=snapshot.target_profile)
+        after_snapshot = scan_repository(after_root, targets=snapshot.target_profile)
 
         before_keys = {_finding_key(item) for item in before_snapshot.findings}
         after_keys = {_finding_key(item) for item in after_snapshot.findings}
