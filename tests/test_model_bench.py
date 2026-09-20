@@ -9,6 +9,7 @@ import unittest
 from modfactory.model_bench import (
     build_model_request,
     inspect_unified_diff,
+    run_model_request,
     score_model_response,
     validate_response_envelope,
     write_model_request,
@@ -101,6 +102,39 @@ class ModelBenchmarkTests(unittest.TestCase):
                 "cost_usd": 0.0123,
             },
         }
+
+    def test_provider_neutral_runner_measures_latency_and_preserves_provider_usage(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _, request = self._request_repo(root)
+            diff = self._valid_diff(root)
+
+            class FakeAdapter:
+                provider = "example-provider"
+                model = "ordinary-model"
+
+                def invoke(self, _request):
+                    return {
+                        "provider_request_id": "req-fixture-1",
+                        "unified_diff": diff,
+                        "rationale": "Fixture response",
+                        "usage": {
+                            "input_tokens": 1234,
+                            "output_tokens": 321,
+                        },
+                        "cost_usd": 0.0042,
+                    }
+
+            ticks = iter([100.0, 100.25])
+            response = run_model_request(request, FakeAdapter(), timer=lambda: next(ticks))
+
+            self.assertEqual(response["metrics"]["latency_ms"], 250.0)
+            self.assertEqual(response["metrics"]["input_tokens"], 1234)
+            self.assertEqual(response["metrics"]["output_tokens"], 321)
+            self.assertEqual(response["metrics"]["cost_usd"], 0.0042)
+            self.assertEqual(response["metrics_source"]["latency_ms"], "runner-wall-clock")
+            self.assertEqual(response["metrics_source"]["input_tokens"], "provider")
+            self.assertEqual(response["provider_request_id"], "req-fixture-1")
 
     def test_valid_provider_response_scores_static_review_without_touching_original(self):
         with TemporaryDirectory() as td, TemporaryDirectory() as out:
