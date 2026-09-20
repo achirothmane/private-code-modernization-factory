@@ -56,7 +56,7 @@ def _materialize_after_tree(
     except (OSError, UnicodeError) as exc:
         return False, f"target-read-failed: {exc}"
 
-    after, blocked_reason = _apply_recipe(recipe_id, before)
+    after, blocked_reason = _apply_recipe(recipe_id, before, target)
     if blocked_reason:
         return False, f"transform-blocked: {blocked_reason}"
     if after == before:
