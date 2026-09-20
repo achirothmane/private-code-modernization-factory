@@ -208,7 +208,48 @@ def _python_legacy_findings(rel: str, text: str) -> list[Finding]:
     ]
 
 
-def _npm_manifest_findings(path: Path, rel: str, text: str) -> list[Finding]:
+def _npm_dependency_usage_observed(
+    root: Path,
+    package: str,
+    payload: dict[str, object],
+) -> str | None:
+    scripts = payload.get("scripts")
+    if isinstance(scripts, dict):
+        for name, value in scripts.items():
+            if isinstance(value, str) and re.search(
+                rf"(?<![A-Za-z0-9_-]){re.escape(package)}(?![A-Za-z0-9_-])",
+                value,
+            ):
+                return f"package.json script {name}"
+
+    quoted = re.escape(package)
+    patterns = (
+        re.compile(rf"""require\s*\(\s*['"]{quoted}(?:/[^'"]+)?['"]\s*\)"""),
+        re.compile(rf"""from\s+['"]{quoted}(?:/[^'"]+)?['"]"""),
+        re.compile(rf"""import\s*\(\s*['"]{quoted}(?:/[^'"]+)?['"]\s*\)"""),
+        re.compile(rf"""import\s+['"]{quoted}(?:/[^'"]+)?['"]"""),
+    )
+
+    for current, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        current_path = Path(current)
+        for name in names:
+            candidate = current_path / name
+            if candidate.suffix.lower() not in NPM_SOURCE_EXTENSIONS:
+                continue
+            source = _read_text(candidate)
+            if source is None:
+                continue
+            for pattern in patterns:
+                match = pattern.search(source)
+                if match:
+                    line = source.count("\n", 0, match.start()) + 1
+                    rel = candidate.relative_to(root).as_posix()
+                    return f"{rel}:{line}"
+    return None
+
+
+def _npm_manifest_findings(root: Path, path: Path, rel: str, text: str) -> list[Finding]:
     if path.name != "package.json":
         return []
     try:
@@ -229,24 +270,42 @@ def _npm_manifest_findings(path: Path, rel: str, text: str) -> list[Finding]:
                 direct.setdefault(package, (section, version))
 
     findings: list[Finding] = []
-    if "node-sass" in direct:
-        section, version = direct["node-sass"]
-        findings.append(_finding(
-            path=rel,
-            message="node-sass is deprecated",
-            evidence=f"Direct npm dependency: {section}.node-sass={version}",
-            remediation="Migrate to Dart Sass (sass package).",
-            score=10,
-        ))
-    if "request" in direct:
-        section, version = direct["request"]
-        findings.append(_finding(
-            path=rel,
-            message="request npm package is deprecated",
-            evidence=f"Direct npm dependency: {section}.request={version}",
-            remediation="Replace request with fetch, undici, axios, or another maintained HTTP client.",
-            score=8,
-        ))
+    for package, (section, version) in direct.items():
+        usage = _npm_dependency_usage_observed(root, package, payload)
+        if usage is None:
+            findings.append(Finding(
+                category="dependency-hygiene",
+                severity="medium",
+                path=rel,
+                message=f"Deprecated direct npm dependency has no observed source usage: {package}",
+                evidence=(
+                    f"Direct npm dependency: {section}.{package}={version}; "
+                    "no static import/require or package-script usage was observed."
+                ),
+                remediation=(
+                    "Verify the dependency is unused, remove it, regenerate the lockfile, "
+                    "and run the baseline. Do not replace an unused dependency with a new package."
+                ),
+                score=4,
+            ))
+            continue
+
+        if package == "node-sass":
+            findings.append(_finding(
+                path=rel,
+                message="node-sass is deprecated",
+                evidence=f"Direct npm dependency: {section}.node-sass={version}; usage: {usage}",
+                remediation="Migrate to Dart Sass (sass package).",
+                score=10,
+            ))
+        elif package == "request":
+            findings.append(_finding(
+                path=rel,
+                message="request npm package is deprecated",
+                evidence=f"Direct npm dependency: {section}.request={version}; usage: {usage}",
+                remediation="Replace request with fetch, undici, axios, or another maintained HTTP client.",
+                score=8,
+            ))
     return findings
 
 
@@ -279,14 +338,14 @@ def _java_legacy_findings(rel: str, text: str) -> list[Finding]:
     return []
 
 
-def _legacy_findings_for_file(path: Path, rel: str, lang: str | None, text: str) -> list[Finding]:
+def _legacy_findings_for_file(root: Path, path: Path, rel: str, lang: str | None, text: str) -> list[Finding]:
     findings: list[Finding] = []
 
     if lang == "Python":
         findings.extend(_python_legacy_findings(rel, text))
 
     if path.name == "package.json":
-        findings.extend(_npm_manifest_findings(path, rel, text))
+        findings.extend(_npm_manifest_findings(root, path, rel, text))
 
     if lang in {"JavaScript", "TypeScript"}:
         findings.extend(_javascript_legacy_findings(rel, text))
@@ -354,7 +413,7 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
                     score=4,
                 ))
 
-            findings.extend(_legacy_findings_for_file(path, rel, lang, text))
+            findings.extend(_legacy_findings_for_file(root, path, rel, lang, text))
 
     if source_files and not test_files:
         findings.append(Finding(
