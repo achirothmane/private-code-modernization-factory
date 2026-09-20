@@ -1,13 +1,6 @@
 name: Wave 7E Deterministic React Benchmark
 
 on:
-  push:
-    branches:
-      - wave7e-ordinary-model-benchmark
-    paths:
-      - ".github/workflows/semantic-benchmark.yml"
-      - "benchmarks/**"
-      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
