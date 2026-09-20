@@ -15,6 +15,11 @@ SEMANTIC_BLOCK_REASONS = {
     "transform-blocked",
     "slice-has-no-recipe",
 }
+SAFETY_BLOCK_REASONS = {
+    "baseline-tests-missing",
+    "baseline-ci-missing",
+    "baseline-test-command-not-discovered",
+}
 
 CONTEXT_FILE_CHAR_LIMIT = 120_000
 CONTEXT_TASK_CHAR_LIMIT = 300_000
@@ -134,6 +139,13 @@ def build_model_evaluation_plan(
             diff_budget=diff_budget,
         )
         reason = str(proposal.get("reason", "unknown"))
+        if reason in SAFETY_BLOCK_REASONS:
+            blocked.append({
+                "slice_id": item["id"],
+                "target": item["target"],
+                "reason": reason,
+            })
+            continue
         if reason not in SEMANTIC_BLOCK_REASONS:
             continue
 
