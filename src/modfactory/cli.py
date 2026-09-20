@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from .benchmark import benchmark_corpus, write_benchmark
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
 from .model_eval import build_model_evaluation_plan, write_model_evaluation_plan
+from .model_bench import (
+    build_model_request,
+    load_request,
+    load_response,
+    score_model_response,
+    write_model_request,
+    write_model_score,
+)
 from .report import write_report
 from .scanner import scan_repository
 from .verification import build_differential_verification, write_verification
@@ -59,6 +68,29 @@ def build_parser() -> argparse.ArgumentParser:
     eval_plan.add_argument("--output", default=".modfactory", help="Output directory")
     eval_plan.add_argument("--diff-budget", type=int, default=DEFAULT_DIFF_BUDGET,
                            help="Maximum added+removed lines allowed when probing deterministic proposals")
+
+    model_request = sub.add_parser(
+        "model-request",
+        help="Build a provider-neutral request artifact for one eligible model-evaluation task",
+    )
+    model_request.add_argument("plan", help="Path to model-eval plan.json")
+    model_request.add_argument("--task-id", required=True, help="Task ID from the model-evaluation plan")
+    model_request.add_argument("--provider", required=True, help="Provider identifier to record in the benchmark contract")
+    model_request.add_argument("--model", required=True, help="Model identifier to record in the benchmark contract")
+    model_request.add_argument("--output", default=".modfactory", help="Output directory")
+
+    model_score = sub.add_parser(
+        "model-score",
+        help="Score one provider response against scope, static evidence, and optional project tests",
+    )
+    model_score.add_argument("repository", help="Path to repository")
+    model_score.add_argument("--request", required=True, help="Path to model-bench request.json")
+    model_score.add_argument("--response", required=True, help="Path to provider response JSON")
+    model_score.add_argument("--output", default=".modfactory", help="Output directory")
+    model_score.add_argument("--allow-project-code", action="store_true",
+                             help="Explicitly allow discovered project test commands in temporary copies")
+    model_score.add_argument("--timeout", type=int, default=120,
+                             help="Per-command timeout in seconds when project-code execution is enabled")
     for command_parser in (analyze, propose, verify, bench, eval_plan):
         command_parser.add_argument(
             "--target",
@@ -159,6 +191,57 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSONL: {jsonl_path}")
         print(f"Markdown: {md_path}")
         return 0
+
+    if args.command == "model-request":
+        try:
+            plan = load_request(args.plan)
+            request = build_model_request(
+                plan,
+                args.task_id,
+                provider=args.provider,
+                model=args.model,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        path = write_model_request(request, args.output)
+        print(f"Benchmark ID: {request['benchmark_id']}")
+        print(f"Task: {request['task_id']}")
+        print(f"Provider: {request['provider']}")
+        print(f"Model: {request['model']}")
+        print("Provider invoked: false")
+        print(f"Request: {path}")
+        return 0
+
+    if args.command == "model-score":
+        if args.timeout < 1:
+            print("--timeout must be >= 1", file=sys.stderr)
+            return 2
+        try:
+            request = load_request(args.request)
+            response = load_response(args.response)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        score = score_model_response(
+            args.repository,
+            request,
+            response,
+            allow_project_code=args.allow_project_code,
+            timeout_seconds=args.timeout,
+        )
+        json_path, md_path = write_model_score(score, args.output)
+        print(f"Score status: {score['status']}")
+        print(f"Reason: {score['reason']}")
+        print(f"JSON: {json_path}")
+        print(f"Markdown: {md_path}")
+        if score["status"] == "PASS":
+            return 0
+        if score["status"] == "REVIEW":
+            return 4
+        if score["status"] == "BLOCKED":
+            return 5
+        return 7
 
     if args.command == "benchmark":
         if args.diff_budget < 1:
