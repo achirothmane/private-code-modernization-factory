@@ -310,16 +310,76 @@ def _npm_manifest_findings(root: Path, path: Path, rel: str, text: str) -> list[
     return findings
 
 
-def _javascript_legacy_findings(rel: str, text: str) -> list[Finding]:
+def _nearest_package_json(root: Path, path: Path) -> tuple[Path, dict[str, object]] | None:
+    current = path.parent
+    while True:
+        manifest = current / "package.json"
+        if manifest.exists():
+            text = _read_text(manifest)
+            if text is not None:
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    return manifest, payload
+        if current == root:
+            return None
+        try:
+            current.relative_to(root)
+        except ValueError:
+            return None
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def _npm_dependency_version(payload: dict[str, object], package: str) -> str | None:
+    for section in NPM_DEPENDENCY_SECTIONS:
+        deps = payload.get(section)
+        if not isinstance(deps, dict):
+            continue
+        version = deps.get(package)
+        if isinstance(version, str):
+            return version
+    return None
+
+
+def _semver_major(version: str) -> int | None:
+    match = re.search(r"(?<!\\d)(\\d+)(?:\\.\\d+)?(?:\\.\\d+)?", version)
+    return int(match.group(1)) if match else None
+
+
+def _javascript_legacy_findings(root: Path, path: Path, rel: str, text: str) -> list[Finding]:
     match = REACTDOM_RENDER_PATTERN.search(text)
     if not match:
         return []
+
+    package_info = _nearest_package_json(root, path)
+    if package_info is None:
+        return []
+
+    manifest, payload = package_info
+    react_dom_version = _npm_dependency_version(payload, "react-dom")
+    if react_dom_version is None:
+        return []
+
+    major = _semver_major(react_dom_version)
+    if major is None or major < 18:
+        # ReactDOM.render is normal for React 16/17. Without an explicit target
+        # upgrade to React 18+, this is not a current modernization defect.
+        return []
+
     line = text.count("\n", 0, match.start()) + 1
+    manifest_rel = manifest.relative_to(root).as_posix()
     return [_finding(
         path=rel,
         message="Legacy React render API detected",
-        evidence=f"JavaScript call at line {line}: ReactDOM.render(...)",
-        remediation="Migrate to createRoot before adopting newer React behavior.",
+        evidence=(
+            f"JavaScript call at line {line}: ReactDOM.render(...); "
+            f"{manifest_rel} declares react-dom={react_dom_version}"
+        ),
+        remediation="Migrate to createRoot for React 18+ behavior.",
         score=7,
     )]
 
@@ -349,7 +409,7 @@ def _legacy_findings_for_file(root: Path, path: Path, rel: str, lang: str | None
         findings.extend(_npm_manifest_findings(root, path, rel, text))
 
     if lang in {"JavaScript", "TypeScript"}:
-        findings.extend(_javascript_legacy_findings(rel, text))
+        findings.extend(_javascript_legacy_findings(root, path, rel, text))
 
     if lang == "Java":
         findings.extend(_java_legacy_findings(rel, text))
