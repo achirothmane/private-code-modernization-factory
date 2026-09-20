@@ -49,6 +49,17 @@ class ScannerTests(unittest.TestCase):
             self.assertNotIn("distutils is removed from modern Python", legacy)
             self.assertNotIn("Python imp module is removed in Python 3.12+", legacy)
 
+    def test_python_311_target_suppresses_python312_removed_api_signal(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text("import imp\n", encoding="utf-8")
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+            snap = scan_repository(root, targets={"python": "3.11"})
+            self.assertFalse(any("imp module" in f.message for f in snap.findings))
+
+            targeted = scan_repository(root, targets={"python": "3.12"})
+            self.assertTrue(any("imp module" in f.message for f in targeted.findings))
+
     def test_python_detector_uses_import_syntax_not_free_text(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -123,6 +134,24 @@ class ScannerTests(unittest.TestCase):
             snap = scan_repository(root)
             self.assertFalse(any(f.message == "Legacy React render API detected" for f in snap.findings))
 
+    def test_react17_render_escalates_when_explicit_target_is_react18(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "ui" / "src").mkdir(parents=True)
+            (root / "ui" / "package.json").write_text(
+                json.dumps({"dependencies": {"react": "^17.0.2", "react-dom": "^17.0.2"}}),
+                encoding="utf-8",
+            )
+            (root / "ui" / "src" / "index.tsx").write_text(
+                "import ReactDOM from 'react-dom';\nReactDOM.render(<App />, document.getElementById('root'));\n",
+                encoding="utf-8",
+            )
+            snap = scan_repository(root, targets={"react-dom": "18"})
+            findings = [f for f in snap.findings if f.message == "Legacy React render API detected"]
+            self.assertEqual(len(findings), 1)
+            self.assertIn("explicit target react-dom=18", findings[0].evidence)
+            self.assertEqual(snap.target_profile, {"react-dom": "18"})
+
     def test_reactdom_render_is_escalated_when_react_dom_is_18_plus(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -159,18 +188,42 @@ class ScannerTests(unittest.TestCase):
             messages = [f.message for f in snap.findings if f.category == "legacy-api"]
             self.assertNotIn("Javax namespace detected", messages)
 
-    def test_javax_detector_keeps_known_jakarta_candidate_imports(self):
+    def test_javax_detector_requires_spring_boot_3_context(self):
         with TemporaryDirectory() as td:
             root = Path(td)
             (root / "App.java").write_text(
                 "import javax.persistence.Entity;\nclass App {}\n",
                 encoding="utf-8",
             )
-            (root / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+            (root / "pom.xml").write_text(
+                "<project><properties><spring-boot.version>2.7.18</spring-boot.version></properties></project>\n",
+                encoding="utf-8",
+            )
+            snap = scan_repository(root)
+            self.assertFalse(any(f.message == "Javax namespace detected" for f in snap.findings))
+
+            targeted = scan_repository(root, targets={"spring-boot": "3.3"})
+            findings = [f for f in targeted.findings if f.message == "Javax namespace detected"]
+            self.assertEqual(len(findings), 1)
+            self.assertIn("javax.persistence.Entity", findings[0].evidence)
+            self.assertIn("explicit target spring-boot=3.3", findings[0].evidence)
+
+    def test_javax_detector_infers_current_spring_boot_3(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "App.java").write_text(
+                "import javax.persistence.Entity;\nclass App {}\n",
+                encoding="utf-8",
+            )
+            (root / "pom.xml").write_text(
+                "<project><properties><spring-boot.version>3.4.2</spring-boot.version></properties></project>\n",
+                encoding="utf-8",
+            )
             snap = scan_repository(root)
             findings = [f for f in snap.findings if f.message == "Javax namespace detected"]
             self.assertEqual(len(findings), 1)
-            self.assertIn("javax.persistence.Entity", findings[0].evidence)
+            self.assertIn("Spring Boot 3.4.2", findings[0].evidence)
 
 
 class HistoryTests(unittest.TestCase):
