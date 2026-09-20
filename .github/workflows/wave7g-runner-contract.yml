@@ -1,14 +1,6 @@
 name: Wave 7G Provider-Neutral Runner Contract
 
 on:
-  push:
-    branches:
-      - wave7g-provider-neutral-runner
-    paths:
-      - ".github/workflows/wave7g-runner-contract.yml"
-      - "benchmarks/wave7f-corpus.json"
-      - "benchmarks/fetch_corpus.py"
-      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
