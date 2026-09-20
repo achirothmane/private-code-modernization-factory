@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .report import write_report
 from .scanner import scan_repository
@@ -26,9 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "analyze":
         snapshot = scan_repository(args.repository)
         json_path, md_path = write_report(snapshot, args.output)
+        harness_dir = Path(args.output) / "harness"
         print(f"Risk: {snapshot.risk_score}/100 ({snapshot.risk_band})")
         print(f"JSON: {json_path}")
         print(f"Markdown: {md_path}")
+        print(f"Harness: {harness_dir / 'harness.json'}")
+        print(f"Baseline script: {harness_dir / 'baseline.sh'}")
         thresholds = {"high": 45, "critical": 70}
         if args.fail_on != "none" and snapshot.risk_score >= thresholds[args.fail_on]:
             return 2

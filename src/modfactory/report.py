@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .commands import discover_commands
+from .harness import build_test_harness, write_harness_files
 from .models import RepoSnapshot
 from .planner import build_plan
 from .recipes import build_recipe_instances
@@ -10,8 +12,12 @@ from .slices import build_migration_slices
 
 
 def build_payload(snapshot: RepoSnapshot) -> dict[str, object]:
+    commands = discover_commands(snapshot.root, snapshot)
+    harness = build_test_harness(snapshot, commands)
     return {
         "snapshot": snapshot.to_dict(),
+        "baseline_commands": commands,
+        "test_harness": harness,
         "plan": build_plan(snapshot),
         "migration_recipes": build_recipe_instances(snapshot.findings),
         "migration_slices": build_migration_slices(snapshot),
@@ -44,11 +50,47 @@ def render_markdown(payload: dict[str, object]) -> str:
         f"- Architecture edges: {snap.get('architecture', {}).get('edge_count', 0)}",
         f"- Dependency cycles: {len(snap.get('architecture', {}).get('cycles', []))}",
         f"- Dependency hubs: {len(snap.get('architecture', {}).get('hubs', []))}",
+        f"- Baseline commands discovered: {len(payload.get('baseline_commands', []))}",
+        f"- Test harness: {payload.get('test_harness', {}).get('status', 'unknown')}",
         f"- Migration recipes: {len(payload.get('migration_recipes', []))}",
+        "",
+        "## Baseline command discovery",
+        "",
+    ]
+
+    commands = payload.get("baseline_commands", [])
+    if not commands:
+        lines.extend([
+            "No reliable build/test/lint command was discovered.",
+            "",
+        ])
+    else:
+        for item in commands:
+            lines.extend([
+                f"### {str(item['kind']).upper()}: `{item['command']}`",
+                f"- Source: `{item['source']}`",
+                f"- Confidence: {item['confidence']}",
+                f"- Reason: {item['reason']}",
+                f"- Execution: {item['execution_policy']} (never auto-run)",
+                "",
+            ])
+
+    harness = payload.get("test_harness", {})
+    lines.extend([
+        "## Test harness",
+        "",
+        f"- Status: {harness.get('status', 'unknown')}",
+        f"- Human review required: {harness.get('requires_human_review', True)}",
+        f"- Auto-executes project code: {harness.get('auto_executes_project_code', False)}",
+        "- Limitations:",
+        *[f"  - {item}" for item in harness.get("limitations", [])],
+        "",
+        "Generated harness artifacts are written under `.modfactory/harness/` (or the selected output directory).",
         "",
         "## Findings",
         "",
-    ]
+    ])
+
     findings = snap["findings"]
     if not findings:
         lines.append("No modernization blockers detected by the current rule set.")
@@ -96,6 +138,7 @@ def render_markdown(payload: dict[str, object]) -> str:
             *[f"- {item}" for item in step["exit_criteria"]],
             "",
         ])
+
     lines.extend(["## Migration slices", ""])
     for item in payload["migration_slices"]:
         lines.extend([
@@ -125,4 +168,5 @@ def write_report(snapshot: RepoSnapshot, out_dir: str | Path) -> tuple[Path, Pat
     md_path = out / "report.md"
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     md_path.write_text(render_markdown(payload), encoding="utf-8")
+    write_harness_files(payload["test_harness"], out)
     return json_path, md_path
