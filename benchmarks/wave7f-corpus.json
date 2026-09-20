@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "note": "Wave 7F isolated semantic-survivor corpus. The candidate is explicitly a test-suite modernization case, not production runtime usage.",
+  "repositories": [
+    {
+      "name": "auth0-node-wsfed-request-tests",
+      "repo": "auth0/node-wsfed",
+      "commit": "3bd751a1749d8746b981ce0e8daabe9eaec654b0",
+      "path": "auth0-node-wsfed-request-tests",
+      "evidence": "package.json devDepends on request~2.88.2; seven real test files require request; npm test exists; GitHub Actions test.yml exists. This is test-suite modernization, not runtime production usage."
+    }
+  ]
+}
