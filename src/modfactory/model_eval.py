@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 
 from .commands import discover_commands
@@ -104,6 +106,44 @@ def _related_tests(root: Path, snapshot: RepoSnapshot, target: Path) -> list[Pat
     return candidates[:MAX_RELATED_TESTS]
 
 
+
+NPM_USAGE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+
+def _npm_usage_sites(root: Path, package: str) -> list[Path]:
+    quoted = re.escape(package)
+    patterns = (
+        re.compile(rf"""require\s*\(\s*['"]{quoted}(?:/[^'"]+)?['"]\s*\)"""),
+        re.compile(rf"""from\s+['"]{quoted}(?:/[^'"]+)?['"]"""),
+        re.compile(rf"""import\s*\(\s*['"]{quoted}(?:/[^'"]+)?['"]\s*\)"""),
+        re.compile(rf"""import\s+['"]{quoted}(?:/[^'"]+)?['"]"""),
+    )
+    found: list[Path] = []
+    skip = {".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__"}
+    for current, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in skip]
+        base = Path(current)
+        for name in names:
+            candidate = base / name
+            if candidate.suffix.lower() not in NPM_USAGE_EXTENSIONS:
+                continue
+            text = _read_text(candidate)
+            if any(pattern.search(text) for pattern in patterns):
+                found.append(candidate)
+    return sorted(found, key=lambda p: p.relative_to(root).as_posix())
+
+
+def _semantic_usage_sites(root: Path, recipe: dict[str, object] | None) -> list[Path]:
+    if not recipe:
+        return []
+    recipe_id = str(recipe.get("id", ""))
+    if recipe_id == "npm-request-to-modern-http":
+        return _npm_usage_sites(root, "request")
+    if recipe_id == "node-sass-to-sass":
+        return _npm_usage_sites(root, "node-sass")
+    return []
+
+
 def _context_file(root: Path, path: Path, role: str, signal: str = "") -> dict[str, object]:
     raw = _read_text(path)
     content, truncated = _bounded_context(raw, signal)
@@ -172,16 +212,25 @@ def build_model_evaluation_plan(
             continue
 
         signal = _signal_for_title(str(item["title"]))
+        recipe = item.get("recipe") if isinstance(item.get("recipe"), dict) else None
         context_files = [_context_file(root, target, "target", signal)]
 
         manifest = _nearest_manifest(root, target)
         if manifest is not None and manifest != target:
             context_files.append(_context_file(root, manifest, "manifest"))
 
-        for test_path in _related_tests(root, snapshot, target):
-            if test_path == target or any(f["path"] == test_path.relative_to(root).as_posix() for f in context_files):
+        usage_sites = _semantic_usage_sites(root, recipe)
+        for usage_path in usage_sites:
+            rel = usage_path.relative_to(root).as_posix()
+            if any(f["path"] == rel for f in context_files):
                 continue
-            context_files.append(_context_file(root, test_path, "related-test"))
+            context_files.append(_context_file(root, usage_path, "usage-site", signal))
+
+        if not usage_sites:
+            for test_path in _related_tests(root, snapshot, target):
+                if test_path == target or any(f["path"] == test_path.relative_to(root).as_posix() for f in context_files):
+                    continue
+                context_files.append(_context_file(root, test_path, "related-test"))
 
         context_chars = sum(int(f["characters"]) for f in context_files)
         if context_chars <= 80_000:
@@ -191,7 +240,12 @@ def build_model_evaluation_plan(
         else:
             context_band = "large"
 
-        recipe = item.get("recipe") if isinstance(item.get("recipe"), dict) else None
+        allowed_changes = list(item.get("allowed_changes", []))
+        if usage_sites:
+            allowed_changes = [str(item["target"])] + [
+                path.relative_to(root).as_posix() for path in usage_sites
+            ]
+
         tasks.append({
             "task_id": f"model-{item['id']}",
             "slice_id": item["id"],
@@ -201,7 +255,7 @@ def build_model_evaluation_plan(
             "evidence": item.get("evidence"),
             "target_profile": snapshot.target_profile,
             "recipe": recipe,
-            "allowed_changes": item.get("allowed_changes", []),
+            "allowed_changes": allowed_changes,
             "preconditions": item.get("preconditions", []),
             "acceptance_criteria": item.get("verification", []),
             "rollback_triggers": item.get("rollback_triggers", []),
@@ -211,9 +265,9 @@ def build_model_evaluation_plan(
             "context_band": context_band,
             "requires_full_repository_context": context_band == "large",
             "model_instruction": (
-                "Propose one minimal patch for this migration slice. Modify only allowed paths. "
-                "Preserve behavior, satisfy the explicit target profile, and explain any semantic "
-                "assumptions. Return a unified diff plus a short verification rationale. Do not merge or deploy."
+                "Propose one minimal patch for this migration slice. Modify only the explicit allowed paths. "
+                "Migrate every observed usage-site included in the context, preserve behavior, and explain any "
+                "semantic assumptions. Return a unified diff plus a short verification rationale. Do not merge or deploy."
             ),
             "evaluation_dimensions": [
                 "patch-applies-cleanly",

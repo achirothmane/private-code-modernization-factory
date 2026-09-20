@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "wave": "7F",
+  "title": "First Real Semantic Survivor",
+  "workflow_run_id": 35487086073,
+  "artifact_id": 10598480546,
+  "candidate": {
+    "repo": "auth0/node-wsfed",
+    "commit": "3bd751a1749d8746b981ce0e8daabe9eaec654b0",
+    "scope": "test-suite modernization",
+    "production_runtime_usage": false
+  },
+  "metrics": {
+    "source_files": 22,
+    "test_files": 25,
+    "ci_files": 5,
+    "compatibility_slices": 1,
+    "patch_proposals": 0,
+    "semantic_escalations": 1,
+    "safety_blockers": 0,
+    "eligible_model_tasks": 1,
+    "context_characters": 38731,
+    "context_band": "small",
+    "full_repository_context": false
+  },
+  "allowed_changes": [
+    "package.json",
+    "test/federationServerService.tests.js",
+    "test/jwt.tests.js",
+    "test/metadata.tests.js",
+    "test/wsfed-encryption.tests.js",
+    "test/wsfed-sha1.tests.js",
+    "test/wsfed.custom_form.tests.js",
+    "test/wsfed.tests.js"
+  ],
+  "compute": {
+    "ordinary_model_benchmark_justified": true,
+    "ordinary_model_benchmark_run": false,
+    "long_context_justified": false,
+    "b300_justified": false,
+    "b300_rental_recommended": false
+  },
+  "conclusion": "First benchmark-ready semantic survivor after all current gates. No inference metrics were invented."
+}

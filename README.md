@@ -190,6 +190,53 @@ This falsified the Wave 7D next-step hypothesis before inference:
 
 The ordinary-model benchmark is therefore not justified for these four React tasks. A model benchmark should be opened only when a future real case still has eligible semantic tasks after deterministic-transform discovery.
 
+## Wave 7F: First Real Semantic Survivor
+
+Wave 7F searched for a real migration that still survives evidence quality, target compatibility, safety prerequisites, deterministic-transform discovery, and context minimization.
+
+Pinned candidate:
+
+- repository: `auth0/node-wsfed`
+- commit: `3bd751a1749d8746b981ce0e8daabe9eaec654b0`
+- migration: deprecated `request@~2.88.2`
+- scope: **test-suite modernization**, not production runtime code
+- observed usage sites: 7 test files
+- baseline command: `npm test`
+- GitHub Actions CI: present
+
+Measured result:
+
+- repositories analyzed: 1 / 1
+- source files: 22
+- test files: 25
+- CI files: 5
+- compatibility slices: 1
+- deterministic proposals: 0
+- semantic escalations: 1
+- safety blockers: 0
+- eligible model-evaluation tasks: 1
+- escalation tier: **LOCAL_MODEL_EVALUATION_CANDIDATE**
+- B300 rental recommended: false
+
+The original model-evaluation bundle only included three nearby tests. Wave 7F strengthened this gate: npm semantic tasks now enumerate every observed static import/require usage site and convert the allowed-change scope into exact paths.
+
+For this candidate the final bundle contains:
+
+- `package.json`
+- `test/federationServerService.tests.js`
+- `test/jwt.tests.js`
+- `test/metadata.tests.js`
+- `test/wsfed-encryption.tests.js`
+- `test/wsfed-sha1.tests.js`
+- `test/wsfed.custom_form.tests.js`
+- `test/wsfed.tests.js`
+
+Total context: **38,731 characters**, classified `small`; full-repository context required: false.
+
+No model inference was run in Wave 7F. This environment does not currently expose a generic measured inference channel that can return a comparable model identity, latency, token usage, and cost for this benchmark, so those metrics were not invented.
+
+Wave 7F therefore establishes the first benchmark-ready semantic survivor. The next engineering step is an ordinary-model runner/scorer that consumes this exact task bundle and records patch correctness, scope compliance, tests, latency, tokens, and cost when a measured inference provider is available.
+
 ## Compute gate
 
 Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
@@ -275,7 +322,8 @@ General imp → importlib remains blocked until its semantics can be encoded and
 7C. ✅ Real Legacy Evidence Corpus + Target Compatibility Gate.
 7D. ✅ Explicit Target Profile + Model Evaluation Harness + Context Locality Gate.
 7E. ✅ Deterministic Falsification Before Model Inference — 4/4 real React 18 tasks converted to verified deterministic proposals; model benchmark cancelled for this case.
-7F. Find or create a real semantic case that still survives evidence, target, safety, deterministic-transform, and context gates before opening an ordinary-model benchmark.
+7F. ✅ First Real Semantic Survivor — Auth0 node-wsfed test-suite request migration survives all current gates; exact 8-file bundle, 38,731 characters, model benchmark justified but not yet executed.
+7G. Build the measured ordinary-model runner/scorer and run it only through a provider that exposes model identity, latency, token usage, and cost.
 
 ## Principle
 
