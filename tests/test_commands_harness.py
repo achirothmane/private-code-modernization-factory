@@ -47,6 +47,25 @@ class CommandDiscoveryTests(unittest.TestCase):
             self.assertTrue(any(item["command"] == "python -m unittest discover -s tests -v" for item in commands))
 
 
+    def test_legacy_tox_doctest_baseline_is_discovered(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "module.py").write_text("VALUE = 1\\n", encoding="utf-8")
+            (root / "setup.py").write_text("from distutils.core import setup\\n", encoding="utf-8")
+            (root / "tox.ini").write_text(
+                "[tox]\\nenvlist = py311\\n\\n[testenv]\\ncommands = python -m doctest -v README.rst\\n",
+                encoding="utf-8",
+            )
+            (root / "README.rst").write_text("Example\\n=======\\n", encoding="utf-8")
+
+            snap = scan_repository(root)
+            commands = discover_commands(root, snap)
+            discovered = {item["command"] for item in commands}
+            self.assertIn("tox", discovered)
+            self.assertIn("python -m doctest -v README.rst", discovered)
+            self.assertIn("python setup.py build", discovered)
+
+
 class HarnessTests(unittest.TestCase):
     def test_missing_python_tests_generate_static_syntax_harness_only(self):
         with TemporaryDirectory() as td:

@@ -24,6 +24,7 @@ def _kind_for_command(command: str) -> str | None:
     if any(token in lower for token in (
         "pytest", "unittest", "npm test", "npm run test", "yarn test", "pnpm test",
         "go test", "cargo test", "mvn test", "gradle test", "gradlew test", "rake test",
+        "doctest", " tox", "tox ",
     )):
         return "test"
     if any(token in lower for token in (
@@ -120,6 +121,20 @@ def discover_commands(root: str | Path, snapshot: RepoSnapshot) -> list[dict[str
             command = "python -m unittest discover -s tests -v" if tests_dir.exists() else "python -m unittest discover -v"
             add("test", command, "python-test-layout", "medium",
                 "Python test files were detected without a stronger pytest signal.")
+
+    tox_ini = _read_text(root / "tox.ini")
+    if tox_ini:
+        add("test", "tox", "tox.ini", "high", "tox.ini defines the repository's test environments.")
+        for match in re.finditer(r"(?m)^\\s*commands\\s*=\\s*(.+?)\\s*$", tox_ini):
+            command = match.group(1).strip()
+            kind = _kind_for_command(command) or "test"
+            add(kind, command, "tox.ini#commands", "high",
+                "Command is declared by tox as a test-environment command.")
+
+    setup_py = root / "setup.py"
+    if setup_py.exists():
+        add("build", "python setup.py build", "setup.py", "medium",
+            "Legacy Python setup.py build configuration detected.")
 
     if (root / "go.mod").exists():
         add("test", "go test ./...", "go.mod", "high", "Go module detected.")
