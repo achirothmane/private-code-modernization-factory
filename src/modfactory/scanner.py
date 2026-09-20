@@ -350,7 +350,13 @@ def _semver_major(version: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _javascript_legacy_findings(root: Path, path: Path, rel: str, text: str) -> list[Finding]:
+def _javascript_legacy_findings(
+    root: Path,
+    path: Path,
+    rel: str,
+    text: str,
+    targets: dict[str, str],
+) -> list[Finding]:
     match = REACTDOM_RENDER_PATTERN.search(text)
     if not match:
         return []
@@ -364,42 +370,135 @@ def _javascript_legacy_findings(root: Path, path: Path, rel: str, text: str) -> 
     if react_dom_version is None:
         return []
 
-    major = _semver_major(react_dom_version)
-    if major is None or major < 18:
-        # ReactDOM.render is normal for React 16/17. Without an explicit target
-        # upgrade to React 18+, this is not a current modernization defect.
+    current_major = _semver_major(react_dom_version)
+    target_version = targets.get("react-dom")
+    target_major = _semver_major(target_version) if target_version else None
+    effective_major = target_major if target_major is not None else current_major
+    if effective_major is None or effective_major < 18:
         return []
 
     line = text.count("\n", 0, match.start()) + 1
     manifest_rel = manifest.relative_to(root).as_posix()
+    context = f"{manifest_rel} declares react-dom={react_dom_version}"
+    if target_version:
+        context += f"; explicit target react-dom={target_version}"
     return [_finding(
         path=rel,
         message="Legacy React render API detected",
-        evidence=(
-            f"JavaScript call at line {line}: ReactDOM.render(...); "
-            f"{manifest_rel} declares react-dom={react_dom_version}"
-        ),
+        evidence=f"JavaScript call at line {line}: ReactDOM.render(...); {context}",
         remediation="Migrate to createRoot for React 18+ behavior.",
         score=7,
     )]
 
 
-def _java_legacy_findings(rel: str, text: str) -> list[Finding]:
+def _pom_spring_boot_version(text: str) -> str | None:
+    property_match = re.search(
+        r"<spring-boot\\.version>\\s*([^<]+?)\\s*</spring-boot\\.version>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if property_match:
+        return property_match.group(1).strip()
+
+    parent_match = re.search(
+        r"<parent>.*?<artifactId>\\s*spring-boot-starter-parent\\s*</artifactId>.*?"
+        r"<version>\\s*([^<]+?)\\s*</version>.*?</parent>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if parent_match:
+        return parent_match.group(1).strip()
+
+    bom_match = re.search(
+        r"<dependency>.*?<artifactId>\\s*spring-boot-dependencies\\s*</artifactId>.*?"
+        r"<version>\\s*([^<]+?)\\s*</version>.*?</dependency>",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if bom_match:
+        version = bom_match.group(1).strip()
+        if not version.startswith("${"):
+            return version
+    return None
+
+
+def _spring_boot_version_for_path(root: Path, path: Path) -> tuple[Path, str] | None:
+    current = path.parent
+    while True:
+        pom = current / "pom.xml"
+        if pom.exists():
+            text = _read_text(pom)
+            if text:
+                version = _pom_spring_boot_version(text)
+                if version:
+                    return pom, version
+        if current == root:
+            return None
+        try:
+            current.relative_to(root)
+        except ValueError:
+            return None
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def _java_legacy_findings(
+    root: Path,
+    path: Path,
+    rel: str,
+    text: str,
+    targets: dict[str, str],
+) -> list[Finding]:
+    candidate: tuple[str, int] | None = None
     for match in JAVA_IMPORT_PATTERN.finditer(text):
         imported = match.group(1)
         if any(imported.startswith(prefix) for prefix in JAKARTA_MIGRATION_PREFIXES):
             line = text.count("\n", 0, match.start()) + 1
-            return [_finding(
-                path=rel,
-                message="Javax namespace detected",
-                evidence=f"Jakarta-candidate import at line {line}: {imported}",
-                remediation="Assess Jakarta namespace migration if upgrading to newer enterprise Java stacks.",
-                score=5,
-            )]
-    return []
+            candidate = (imported, line)
+            break
+    if candidate is None:
+        return []
+
+    explicit_target = targets.get("spring-boot")
+    target_major = _semver_major(explicit_target) if explicit_target else None
+    pom_context = _spring_boot_version_for_path(root, path)
+    current_version = pom_context[1] if pom_context else None
+    current_major = _semver_major(current_version) if current_version else None
+    effective_major = target_major if target_major is not None else current_major
+
+    # javax.* is expected in Spring Boot 2.x-era stacks. It becomes a concrete
+    # Jakarta migration requirement only when the current or explicit target
+    # stack is Spring Boot 3+.
+    if effective_major is None or effective_major < 3:
+        return []
+
+    imported, line = candidate
+    context: list[str] = []
+    if pom_context:
+        context.append(
+            f"{pom_context[0].relative_to(root).as_posix()} declares Spring Boot {current_version}"
+        )
+    if explicit_target:
+        context.append(f"explicit target spring-boot={explicit_target}")
+    suffix = f"; {'; '.join(context)}" if context else ""
+    return [_finding(
+        path=rel,
+        message="Javax namespace detected",
+        evidence=f"Jakarta-candidate import at line {line}: {imported}{suffix}",
+        remediation="Migrate affected javax imports/APIs to Jakarta equivalents for Spring Boot 3+.",
+        score=5,
+    )]
 
 
-def _legacy_findings_for_file(root: Path, path: Path, rel: str, lang: str | None, text: str) -> list[Finding]:
+def _legacy_findings_for_file(
+    root: Path,
+    path: Path,
+    rel: str,
+    lang: str | None,
+    text: str,
+    targets: dict[str, str],
+) -> list[Finding]:
     findings: list[Finding] = []
 
     if lang == "Python":
@@ -409,16 +508,21 @@ def _legacy_findings_for_file(root: Path, path: Path, rel: str, lang: str | None
         findings.extend(_npm_manifest_findings(root, path, rel, text))
 
     if lang in {"JavaScript", "TypeScript"}:
-        findings.extend(_javascript_legacy_findings(root, path, rel, text))
+        findings.extend(_javascript_legacy_findings(root, path, rel, text, targets))
 
     if lang == "Java":
-        findings.extend(_java_legacy_findings(rel, text))
+        findings.extend(_java_legacy_findings(root, path, rel, text, targets))
 
     return findings
 
 
-def scan_repository(root: str | Path) -> RepoSnapshot:
+def scan_repository(
+    root: str | Path,
+    *,
+    targets: dict[str, str] | None = None,
+) -> RepoSnapshot:
     root = Path(root).resolve()
+    target_profile = dict(targets or {})
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Repository path does not exist or is not a directory: {root}")
 
@@ -474,7 +578,7 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
                     score=4,
                 ))
 
-            findings.extend(_legacy_findings_for_file(root, path, rel, lang, text))
+            findings.extend(_legacy_findings_for_file(root, path, rel, lang, text, target_profile))
 
     if source_files and not test_files:
         findings.append(Finding(
@@ -518,5 +622,5 @@ def scan_repository(root: str | Path) -> RepoSnapshot:
         root=str(root), files=files, lines=lines, languages=dict(languages),
         manifests=sorted(manifests), ci_files=sorted(ci_files),
         test_files=sorted(test_files), source_files=sorted(source_files), findings=findings,
-        history=history, architecture=architecture,
+        history=history, architecture=architecture, target_profile=target_profile,
     )
