@@ -8,6 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable, Protocol
 
 from .model_eval import _npm_usage_sites
 from .scanner import scan_repository
@@ -16,6 +17,78 @@ from .verification import _copy_repository, _finding_key, _run_test_commands
 
 RESPONSE_SCHEMA_VERSION = 1
 REQUEST_SCHEMA_VERSION = 1
+
+
+class ModelProviderAdapter(Protocol):
+    provider: str
+    model: str
+
+    def invoke(self, request: dict[str, object]) -> dict[str, object]:
+        """Return unified_diff, rationale, and optional provider usage/cost metadata."""
+        ...
+
+
+def run_model_request(
+    request: dict[str, object],
+    adapter: ModelProviderAdapter,
+    *,
+    timer: Callable[[], float] = time.perf_counter,
+) -> dict[str, object]:
+    valid, errors = validate_request_integrity(request)
+    if not valid:
+        raise ValueError("Invalid model request: " + ", ".join(errors))
+    if adapter.provider != request.get("provider"):
+        raise ValueError("Adapter provider does not match request provider")
+    if adapter.model != request.get("model"):
+        raise ValueError("Adapter model does not match request model")
+
+    started = timer()
+    result = adapter.invoke(request)
+    finished = timer()
+    if not isinstance(result, dict):
+        raise ValueError("Provider adapter result must be an object")
+
+    unified_diff = result.get("unified_diff")
+    rationale = result.get("rationale")
+    if not isinstance(unified_diff, str):
+        raise ValueError("Provider adapter must return unified_diff as a string")
+    if not isinstance(rationale, str):
+        raise ValueError("Provider adapter must return rationale as a string")
+
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    input_tokens, input_error = _metric_number(usage.get("input_tokens"), integer=True)
+    output_tokens, output_error = _metric_number(usage.get("output_tokens"), integer=True)
+    cost_usd, cost_error = _metric_number(result.get("cost_usd"), integer=False)
+    metric_errors = [err for err in (input_error, output_error, cost_error) if err]
+    if metric_errors:
+        raise ValueError("Invalid provider metrics: " + ", ".join(metric_errors))
+
+    latency_ms = max(0.0, (finished - started) * 1000.0)
+    return {
+        "schema_version": RESPONSE_SCHEMA_VERSION,
+        "benchmark_id": request["benchmark_id"],
+        "task_id": request["task_id"],
+        "provider": request["provider"],
+        "model": request["model"],
+        "provider_request_id": result.get("provider_request_id"),
+        "unified_diff": unified_diff,
+        "rationale": rationale,
+        "metrics": {
+            "latency_ms": round(latency_ms, 3),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+        },
+        "metrics_source": {
+            "latency_ms": "runner-wall-clock",
+            "input_tokens": "provider" if input_tokens is not None else None,
+            "output_tokens": "provider" if output_tokens is not None else None,
+            "cost_usd": "provider" if cost_usd is not None else None,
+        },
+    }
+
 
 UNSUPPORTED_DIFF_MARKERS = (
     "GIT binary patch",
