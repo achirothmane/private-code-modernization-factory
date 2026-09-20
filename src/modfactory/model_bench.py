@@ -230,7 +230,37 @@ def inspect_unified_diff(diff: str) -> dict[str, object]:
     }
 
 
+def _git_compatible_diff(diff: str) -> str:
+    lines = diff.splitlines(keepends=True)
+    output: list[str] = []
+    previous_nonempty = ""
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("--- ") and index + 1 < len(lines) and lines[index + 1].startswith("+++ "):
+            old_path = _normalize_diff_path(line[4:].split("\t", 1)[0])
+            new_path = _normalize_diff_path(lines[index + 1][4:].split("\t", 1)[0])
+            if (
+                old_path is not None
+                and new_path is not None
+                and old_path == new_path
+                and not previous_nonempty.startswith("diff --git ")
+            ):
+                output.append(f"diff --git a/{old_path} b/{new_path}\n")
+            output.append(line)
+            output.append(lines[index + 1])
+            previous_nonempty = lines[index + 1].strip()
+            index += 2
+            continue
+        output.append(line)
+        if line.strip():
+            previous_nonempty = line.strip()
+        index += 1
+    return "".join(output)
+
+
 def _git_apply(root: Path, diff: str, *, check_only: bool) -> tuple[bool, str]:
+    diff = _git_compatible_diff(diff)
     argv = ["git", "apply", "--recount", "--whitespace=nowarn"]
     if check_only:
         argv.append("--check")
