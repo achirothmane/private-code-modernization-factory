@@ -31,7 +31,7 @@ RECIPES: tuple[MigrationRecipe, ...] = (
         confidence="high",
         strategy="mechanical-with-behavior-check",
         preconditions=(
-            "The module loading behavior is covered by a test or reproducible command.",
+            "The module-loading behavior is covered by a test or reproducible command.",
             "The target Python runtime is 3.8+.",
         ),
         transforms=(
