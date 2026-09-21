@@ -11,7 +11,7 @@ from modfactory.decomposition import (
     build_usage_site_decomposition,
     score_usage_site_response,
 )
-from modfactory.model_bench import build_model_request
+from modfactory.model_bench import build_model_request, run_model_request
 from modfactory.model_eval import build_model_evaluation_plan
 from modfactory.scanner import scan_repository
 
@@ -102,6 +102,47 @@ class UsageSiteDecompositionTests(unittest.TestCase):
                 )
                 self.assertNotIn("package.json", task["allowed_changes"])
                 self.assertFalse(task["requires_full_repository_context"])
+                self.assertEqual(task["response_mode"], "replacement-content")
+
+    def test_replacement_content_is_converted_to_deterministic_unified_diff(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            plan = self._repo(root)
+            task = plan["tasks"][0]
+            request = build_model_request(
+                plan,
+                str(task["task_id"]),
+                provider="fixture",
+                model="fixture-model",
+            )
+            target = str(task["target"])
+            replacement = (
+                "var fetch = require('node-fetch');\n"
+                "fetch('http://example.test/a').then(function () {});\n"
+            )
+
+            class FakeAdapter:
+                provider = "fixture"
+                model = "fixture-model"
+
+                def invoke(self, _request):
+                    return {
+                        "replacement_content": replacement,
+                        "rationale": "Migrate one usage-site.",
+                        "usage": {"input_tokens": 300, "output_tokens": 80},
+                        "cost_usd": None,
+                    }
+
+            response = run_model_request(request, FakeAdapter())
+            self.assertEqual(response["provider_response_mode"], "replacement-content")
+            self.assertEqual(len(response["replacement_sha256"]), 64)
+            self.assertIn(f"--- a/{target}", response["unified_diff"])
+            self.assertIn(f"+++ b/{target}", response["unified_diff"])
+            self.assertIn("+var fetch = require('node-fetch');", response["unified_diff"])
+
+            score = score_usage_site_response(root, request, response)
+            self.assertEqual(score["status"], "REVIEW", score)
+            self.assertEqual(score["dependency_requirements"], ["node-fetch"])
 
     def test_partial_score_accepts_one_file_and_reports_new_dependency(self):
         with TemporaryDirectory() as td:
