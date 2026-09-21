@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import math
@@ -132,10 +133,29 @@ class OpenAICompatibleAdapter:
         if not isinstance(message, dict):
             raise ValueError("OpenAI-compatible response choice has no message")
         parsed = self._decode_content(message.get("content"))
-        unified_diff = parsed.get("unified_diff")
+        task = request.get("task")
+        response_mode = (
+            str(task.get("response_mode", "unified-diff"))
+            if isinstance(task, dict)
+            else "unified-diff"
+        )
         rationale = parsed.get("rationale")
-        if not isinstance(unified_diff, str) or not isinstance(rationale, str):
-            raise ValueError("Structured content must contain unified_diff and rationale strings")
+        if not isinstance(rationale, str):
+            raise ValueError("Structured content must contain rationale as a string")
+
+        if response_mode == "replacement-content":
+            replacement_content = parsed.get("replacement_content")
+            if not isinstance(replacement_content, str):
+                raise ValueError(
+                    "Structured content must contain replacement_content as a string "
+                    "for replacement-content tasks"
+                )
+            generated = {"replacement_content": replacement_content}
+        else:
+            unified_diff = parsed.get("unified_diff")
+            if not isinstance(unified_diff, str):
+                raise ValueError("Structured content must contain unified_diff as a string")
+            generated = {"unified_diff": unified_diff}
 
         usage_payload = payload.get("usage")
         usage: dict[str, object] = {}
@@ -148,7 +168,7 @@ class OpenAICompatibleAdapter:
         return {
             "provider_request_id": payload.get("id"),
             "provider_model_returned": payload.get("model"),
-            "unified_diff": unified_diff,
+            **generated,
             "rationale": rationale,
             "usage": usage,
             "cost_usd": None,
@@ -157,6 +177,47 @@ class OpenAICompatibleAdapter:
                 "system_fingerprint": payload.get("system_fingerprint"),
             },
         }
+
+
+def _replacement_content_to_diff(
+    request: dict[str, object],
+    replacement_content: str,
+) -> tuple[str, str]:
+    task = request.get("task")
+    if not isinstance(task, dict):
+        raise ValueError("Replacement-content request is missing task data")
+    target = task.get("target")
+    if not isinstance(target, str) or not target:
+        raise ValueError("Replacement-content task must have one target path")
+
+    context_files = task.get("context_files", [])
+    if not isinstance(context_files, list):
+        raise ValueError("Replacement-content task context_files must be a list")
+
+    source: dict[str, object] | None = None
+    for item in context_files:
+        if isinstance(item, dict) and item.get("path") == target:
+            source = item
+            break
+    if source is None:
+        raise ValueError("Replacement-content target is not present in task context")
+    if bool(source.get("truncated")):
+        raise ValueError("Replacement-content target context is truncated")
+
+    original = source.get("content")
+    if not isinstance(original, str):
+        raise ValueError("Replacement-content target context has no full content")
+
+    if original.endswith("\n") and replacement_content and not replacement_content.endswith("\n"):
+        replacement_content += "\n"
+
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        replacement_content.splitlines(keepends=True),
+        fromfile=f"a/{target}",
+        tofile=f"b/{target}",
+    ))
+    return diff, hashlib.sha256(replacement_content.encode("utf-8")).hexdigest()
 
 
 def run_model_request(
@@ -179,12 +240,31 @@ def run_model_request(
     if not isinstance(result, dict):
         raise ValueError("Provider adapter result must be an object")
 
-    unified_diff = result.get("unified_diff")
+    task = request.get("task")
+    response_mode = (
+        str(task.get("response_mode", "unified-diff"))
+        if isinstance(task, dict)
+        else "unified-diff"
+    )
     rationale = result.get("rationale")
-    if not isinstance(unified_diff, str):
-        raise ValueError("Provider adapter must return unified_diff as a string")
     if not isinstance(rationale, str):
         raise ValueError("Provider adapter must return rationale as a string")
+
+    replacement_sha256: str | None = None
+    if response_mode == "replacement-content":
+        replacement_content = result.get("replacement_content")
+        if not isinstance(replacement_content, str):
+            raise ValueError(
+                "Provider adapter must return replacement_content for replacement-content tasks"
+            )
+        unified_diff, replacement_sha256 = _replacement_content_to_diff(
+            request,
+            replacement_content,
+        )
+    else:
+        unified_diff = result.get("unified_diff")
+        if not isinstance(unified_diff, str):
+            raise ValueError("Provider adapter must return unified_diff as a string")
 
     usage = result.get("usage")
     if not isinstance(usage, dict):
@@ -205,6 +285,8 @@ def run_model_request(
         "model": request["model"],
         "provider_request_id": result.get("provider_request_id"),
         "provider_model_returned": result.get("provider_model_returned"),
+        "provider_response_mode": response_mode,
+        "replacement_sha256": replacement_sha256,
         "unified_diff": unified_diff,
         "rationale": rationale,
         "metrics": {
@@ -273,6 +355,32 @@ def build_model_request(
     task = _task_from_plan(plan, task_id)
     task_json = json.dumps(task, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     benchmark_id = _sha256_text(task_json)[:16]
+    response_mode = str(task.get("response_mode", "unified-diff"))
+
+    if response_mode == "replacement-content":
+        system_instruction = (
+            "You are producing one review-only repository modernization edit. "
+            "Do not merge, deploy, or modify files outside the explicit allowlist. "
+            "Return ONLY one JSON object with exactly two string fields: replacement_content and rationale. "
+            "replacement_content must contain the COMPLETE final contents of the single target file, "
+            "not a diff, not a fragment, and not markdown fences. Preserve all unrelated content exactly."
+        )
+        provider_output = {
+            "required": ["replacement_content", "rationale"],
+            "replacement_content": "complete final contents of the single target file",
+        }
+    else:
+        system_instruction = (
+            "You are producing a review-only repository modernization patch. "
+            "Do not merge, deploy, or modify files outside the explicit allowlist. "
+            "Return ONLY one JSON object with exactly two string fields: unified_diff and rationale. "
+            "unified_diff must be a standard multi-file unified diff covering every required usage site "
+            "and no files outside the allowlist. Do not wrap the JSON in markdown fences."
+        )
+        provider_output = {
+            "required": ["unified_diff", "rationale"],
+            "unified_diff": "standard unified diff",
+        }
 
     return {
         "schema_version": REQUEST_SCHEMA_VERSION,
@@ -285,14 +393,7 @@ def build_model_request(
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "You are producing a review-only repository modernization patch. "
-                    "Do not merge, deploy, or modify files outside the explicit allowlist. "
-                    "Return ONLY one JSON object with exactly two string fields: "
-                    "unified_diff and rationale. unified_diff must be a standard multi-file unified diff "
-                    "covering every required usage site and no files outside the allowlist. "
-                    "Do not wrap the JSON in markdown fences."
-                ),
+                "content": system_instruction,
             },
             {
                 "role": "user",
@@ -301,6 +402,8 @@ def build_model_request(
         ],
         "response_contract": {
             "schema_version": RESPONSE_SCHEMA_VERSION,
+            "provider_output_mode": response_mode,
+            "provider_output": provider_output,
             "required": [
                 "benchmark_id",
                 "task_id",
