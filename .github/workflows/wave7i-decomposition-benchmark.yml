@@ -1,0 +1,223 @@
+name: Wave 7I Usage-Site Decomposition Benchmark
+
+on:
+  push:
+    branches:
+      - wave7i-usage-site-decomposition
+    paths:
+      - ".github/workflows/wave7i-decomposition-benchmark.yml"
+      - "benchmarks/wave7f-corpus.json"
+      - "benchmarks/fetch_corpus.py"
+      - "src/modfactory/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+
+      - name: Fetch pinned semantic survivor
+        run: python benchmarks/fetch_corpus.py benchmarks/wave7f-corpus.json .wave7i-corpus
+
+      - name: Build parent evaluation plan
+        run: |
+          modfactory eval-plan .wave7i-corpus/auth0-node-wsfed-request-tests \
+            --output wave7i-parent
+
+      - name: Decompose into usage-site tasks
+        shell: bash
+        run: |
+          TASK_ID=$(python -c "import json; print(json.load(open('wave7i-parent/model-eval/plan.json'))['tasks'][0]['task_id'])")
+          modfactory decompose-plan wave7i-parent/model-eval/plan.json \
+            --task-id "$TASK_ID" \
+            --output wave7i-decomposition
+
+      - name: Install pinned llama.cpp CPU binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o llama-b11057-bin-ubuntu-x64.tar.gz \
+            https://github.com/ggml-org/llama.cpp/releases/download/b11057/llama-b11057-bin-ubuntu-x64.tar.gz
+          echo "fa7532f45d5b1c47696afb1cb7c334692262404c81ecc8e28b14dc273796289f  llama-b11057-bin-ubuntu-x64.tar.gz" | sha256sum -c -
+          mkdir -p .llama
+          tar -xzf llama-b11057-bin-ubuntu-x64.tar.gz -C .llama
+
+      - name: Download pinned Qwen2.5-Coder 3B Q4_K_M
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 --retry-delay 5 \
+            -o qwen2.5-coder-3b-instruct-q4_k_m.gguf \
+            "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf?download=true"
+          echo "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7  qwen2.5-coder-3b-instruct-q4_k_m.gguf" | sha256sum -c -
+
+      - name: Start local llama.cpp server
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVER_BIN=$(find .llama -name llama-server -type f | head -1)
+          test -n "$SERVER_BIN"
+          chmod +x "$SERVER_BIN"
+          nohup "$SERVER_BIN" \
+            -m "$PWD/qwen2.5-coder-3b-instruct-q4_k_m.gguf" \
+            -c 16384 \
+            -t 4 \
+            --host 127.0.0.1 \
+            --port 8080 \
+            > wave7i-llama.log 2>&1 &
+          echo $! > wave7i-llama.pid
+          for i in $(seq 1 120); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat wave7i-llama.log
+          exit 1
+
+      - name: Run all file-scoped 3B tasks
+        shell: bash
+        run: |
+          set -u
+          mkdir -p wave7i-runs
+          curl -sf http://127.0.0.1:8080/v1/models > wave7i-models.json
+          MODEL_ID=$(python -c "import json; print(json.load(open('wave7i-models.json'))['data'][0]['id'])")
+          python - <<'PY' > wave7i-task-ids.txt
+          import json
+          plan = json.load(open("wave7i-decomposition/decomposition/plan.json"))
+          for task in plan["tasks"]:
+              print(task["task_id"])
+          PY
+
+          while IFS= read -r TASK_ID; do
+            OUT="wave7i-runs/$TASK_ID"
+            mkdir -p "$OUT"
+            modfactory model-request wave7i-decomposition/decomposition/plan.json \
+              --task-id "$TASK_ID" \
+              --provider llama-cpp \
+              --model "$MODEL_ID" \
+              --output "$OUT"
+
+            set +e
+            modfactory model-run-compatible \
+              --request "$OUT/model-bench/request.json" \
+              --endpoint http://127.0.0.1:8080/v1/chat/completions \
+              --output "$OUT" \
+              --timeout 900 \
+              --max-tokens 1536
+            RUN_RC=$?
+            echo "$RUN_RC" > "$OUT/model-run-exit-code.txt"
+
+            if [ -f "$OUT/model-bench/response.json" ]; then
+              modfactory decompose-score .wave7i-corpus/auth0-node-wsfed-request-tests \
+                --request "$OUT/model-bench/request.json" \
+                --response "$OUT/model-bench/response.json" \
+                --output "$OUT"
+              SCORE_RC=$?
+              echo "$SCORE_RC" > "$OUT/decompose-score-exit-code.txt"
+            fi
+            set -e
+          done < wave7i-task-ids.txt
+
+      - name: Aggregate accepted partial patches
+        shell: bash
+        run: |
+          set +e
+          ARGS=()
+          while IFS= read -r TASK_ID; do
+            OUT="wave7i-runs/$TASK_ID"
+            if [ -f "$OUT/model-bench/response.json" ]; then
+              ARGS+=(--pair "$OUT/model-bench/request.json" "$OUT/model-bench/response.json")
+            fi
+          done < wave7i-task-ids.txt
+
+          modfactory decompose-aggregate .wave7i-corpus/auth0-node-wsfed-request-tests \
+            --plan wave7i-decomposition/decomposition/plan.json \
+            "${ARGS[@]}" \
+            --output wave7i-aggregate
+          echo "$?" > wave7i-aggregate-exit-code.txt
+          exit 0
+
+      - name: Emit measured decomposition summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plan_path = Path("wave7i-decomposition/decomposition/plan.json")
+          plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
+          rows = []
+          for task in plan.get("tasks", []):
+              task_id = task["task_id"]
+              out = Path("wave7i-runs") / task_id
+              response_path = out / "model-bench" / "response.json"
+              score_path = out / "decomposition-score" / "score.json"
+              response = json.loads(response_path.read_text()) if response_path.exists() else None
+              score = json.loads(score_path.read_text()) if score_path.exists() else None
+              rows.append({
+                  "task_id": task_id,
+                  "target": task["target"],
+                  "context_characters": task["context_characters"],
+                  "provider_invoked": response is not None,
+                  "metrics": response.get("metrics") if response else None,
+                  "score_status": score.get("status") if score else None,
+                  "score_reason": score.get("reason") if score else None,
+                  "dependency_requirements": score.get("dependency_requirements") if score else None,
+                  "gates": score.get("gates") if score else None,
+              })
+
+          aggregate_path = Path("wave7i-aggregate/decomposition-aggregate/aggregate.json")
+          aggregate = json.loads(aggregate_path.read_text()) if aggregate_path.exists() else None
+          summary = {
+              "schema_version": 1,
+              "parent_task_id": plan.get("parent_task_id"),
+              "usage_site_tasks": len(plan.get("tasks", [])),
+              "provider_invocations": sum(1 for row in rows if row["provider_invoked"]),
+              "partial_reviews": sum(1 for row in rows if row["score_status"] == "REVIEW"),
+              "partial_failures": sum(1 for row in rows if row["score_status"] == "FAIL"),
+              "rows": rows,
+              "aggregate": aggregate,
+              "project_code_executed": False,
+              "b300_rental_recommended": False,
+          }
+          Path("wave7i-summary.json").write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Capture runtime evidence
+        if: always()
+        run: |
+          mkdir -p wave7i-runtime
+          cp wave7i-llama.log wave7i-runtime/llama.log || true
+          cp wave7i-models.json wave7i-runtime/models.json || true
+          sha256sum qwen2.5-coder-3b-instruct-q4_k_m.gguf > wave7i-runtime/model.sha256 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modfactory-wave7i-usage-site-decomposition
+          path: |
+            wave7i-parent/model-eval/
+            wave7i-decomposition/decomposition/
+            wave7i-runs/
+            wave7i-aggregate/
+            wave7i-summary.json
+            wave7i-runtime/
+          if-no-files-found: error
+
+      - name: Require decomposition evidence
+        if: always()
+        run: |
+          test -f wave7i-decomposition/decomposition/plan.json
+          test -f wave7i-summary.json
