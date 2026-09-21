@@ -151,6 +151,22 @@ class OpenAICompatibleAdapter:
                     "for replacement-content tasks"
                 )
             generated = {"replacement_content": replacement_content}
+        elif response_mode == "edit-operations":
+            edits = parsed.get("edits")
+            if not isinstance(edits, list) or not edits:
+                raise ValueError("Structured content must contain a non-empty edits list")
+            normalized_edits: list[dict[str, str]] = []
+            for index, edit in enumerate(edits):
+                if not isinstance(edit, dict):
+                    raise ValueError(f"Edit {index} must be an object")
+                old_text = edit.get("old_text")
+                new_text = edit.get("new_text")
+                if not isinstance(old_text, str) or not old_text:
+                    raise ValueError(f"Edit {index} old_text must be a non-empty string")
+                if not isinstance(new_text, str):
+                    raise ValueError(f"Edit {index} new_text must be a string")
+                normalized_edits.append({"old_text": old_text, "new_text": new_text})
+            generated = {"edits": normalized_edits}
         else:
             unified_diff = parsed.get("unified_diff")
             if not isinstance(unified_diff, str):
@@ -220,6 +236,63 @@ def _replacement_content_to_diff(
     return diff, hashlib.sha256(replacement_content.encode("utf-8")).hexdigest()
 
 
+def _edit_operations_to_diff(
+    request: dict[str, object],
+    edits: object,
+) -> tuple[str, str]:
+    task = request.get("task")
+    if not isinstance(task, dict):
+        raise ValueError("Edit-operations request is missing task data")
+    target = task.get("target")
+    if not isinstance(target, str) or not target:
+        raise ValueError("Edit-operations task must have one target path")
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("Edit-operations response must contain at least one edit")
+    if len(edits) > 50:
+        raise ValueError("Edit-operations response exceeds 50 edits")
+
+    context_files = task.get("context_files", [])
+    if not isinstance(context_files, list):
+        raise ValueError("Edit-operations task context_files must be a list")
+    source: dict[str, object] | None = None
+    for item in context_files:
+        if isinstance(item, dict) and item.get("path") == target:
+            source = item
+            break
+    if source is None:
+        raise ValueError("Edit-operations target is not present in task context")
+    if bool(source.get("truncated")):
+        raise ValueError("Edit-operations target context is truncated")
+    original = source.get("content")
+    if not isinstance(original, str):
+        raise ValueError("Edit-operations target context has no full content")
+
+    updated = original
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise ValueError(f"Edit {index} must be an object")
+        old_text = edit.get("old_text")
+        new_text = edit.get("new_text")
+        if not isinstance(old_text, str) or not old_text:
+            raise ValueError(f"Edit {index} old_text must be a non-empty string")
+        if not isinstance(new_text, str):
+            raise ValueError(f"Edit {index} new_text must be a string")
+        count = updated.count(old_text)
+        if count != 1:
+            raise ValueError(
+                f"Edit {index} old_text must match exactly once; observed {count} matches"
+            )
+        updated = updated.replace(old_text, new_text, 1)
+
+    diff = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        updated.splitlines(keepends=True),
+        fromfile=f"a/{target}",
+        tofile=f"b/{target}",
+    ))
+    return diff, hashlib.sha256(updated.encode("utf-8")).hexdigest()
+
+
 def run_model_request(
     request: dict[str, object],
     adapter: ModelProviderAdapter,
@@ -260,6 +333,11 @@ def run_model_request(
         unified_diff, replacement_sha256 = _replacement_content_to_diff(
             request,
             replacement_content,
+        )
+    elif response_mode == "edit-operations":
+        unified_diff, replacement_sha256 = _edit_operations_to_diff(
+            request,
+            result.get("edits"),
         )
     else:
         unified_diff = result.get("unified_diff")
@@ -368,6 +446,24 @@ def build_model_request(
         provider_output = {
             "required": ["replacement_content", "rationale"],
             "replacement_content": "complete final contents of the single target file",
+        }
+    elif response_mode == "edit-operations":
+        system_instruction = (
+            "You are producing one review-only repository modernization edit. "
+            "Do not merge, deploy, or modify files outside the explicit allowlist. "
+            "Return ONLY one JSON object with exactly two fields: edits and rationale. "
+            "edits must be a non-empty JSON array of objects with exactly old_text and new_text strings. "
+            "Each old_text MUST be copied exactly from the target file and must identify one unique region. "
+            "Do not return a diff, line numbers, markdown fences, or the complete file."
+        )
+        provider_output = {
+            "required": ["edits", "rationale"],
+            "edits": [
+                {
+                    "old_text": "exact unique text copied from target",
+                    "new_text": "replacement text",
+                }
+            ],
         }
     else:
         system_instruction = (
