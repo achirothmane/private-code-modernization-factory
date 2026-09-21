@@ -48,6 +48,81 @@ def _legacy_package(task: dict[str, object]) -> str | None:
     return None
 
 
+def _strip_javascript_strings_and_comments(text: str) -> str:
+    chars = list(text)
+    i = 0
+    state: str | None = None
+    quote = ""
+    escaped = False
+    while i < len(chars):
+        ch = chars[i]
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+
+        if state == "line-comment":
+            if ch == "\n":
+                state = None
+            else:
+                chars[i] = " "
+            i += 1
+            continue
+
+        if state == "block-comment":
+            if ch == "*" and nxt == "/":
+                chars[i] = " "
+                chars[i + 1] = " "
+                state = None
+                i += 2
+            else:
+                if ch != "\n":
+                    chars[i] = " "
+                i += 1
+            continue
+
+        if state == "string":
+            if escaped:
+                if ch != "\n":
+                    chars[i] = " "
+                escaped = False
+                i += 1
+                continue
+            if ch == "\\":
+                chars[i] = " "
+                escaped = True
+                i += 1
+                continue
+            if ch == quote:
+                chars[i] = " "
+                state = None
+                quote = ""
+                i += 1
+                continue
+            if ch != "\n":
+                chars[i] = " "
+            i += 1
+            continue
+
+        if ch == "/" and nxt == "/":
+            chars[i] = " "
+            chars[i + 1] = " "
+            state = "line-comment"
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            chars[i] = " "
+            chars[i + 1] = " "
+            state = "block-comment"
+            i += 2
+            continue
+        if ch in {"'", '"', "`"}:
+            chars[i] = " "
+            state = "string"
+            quote = ch
+            i += 1
+            continue
+        i += 1
+    return "".join(chars)
+
+
 def _legacy_binding_names(text: str, package: str) -> set[str]:
     quoted = re.escape(package)
     patterns = (
@@ -67,12 +142,34 @@ def _legacy_binding_names(text: str, package: str) -> set[str]:
     return names
 
 
+def _binding_reference_counts(text: str, names: set[str]) -> dict[str, int]:
+    code = _strip_javascript_strings_and_comments(text)
+    return {
+        name: len(re.findall(
+            rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+            code,
+        ))
+        for name in sorted(names)
+    }
+
+
+def _binding_member_uses(text: str, names: set[str]) -> dict[str, dict[str, int]]:
+    code = _strip_javascript_strings_and_comments(text)
+    result: dict[str, dict[str, int]] = {}
+    for name in sorted(names):
+        counts: dict[str, int] = {}
+        for member in re.findall(
+            rf"(?<![A-Za-z0-9_$]){re.escape(name)}\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)",
+            code,
+        ):
+            counts[member] = counts.get(member, 0) + 1
+        result[name] = dict(sorted(counts.items()))
+    return result
+
+
 def _binding_references(text: str, names: set[str]) -> list[str]:
-    return sorted(
-        name
-        for name in names
-        if re.search(rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])", text)
-    )
+    counts = _binding_reference_counts(text, names)
+    return sorted(name for name, count in counts.items() if count > 0)
 
 
 def _external_packages(text: str) -> set[str]:
@@ -137,6 +234,10 @@ def build_usage_site_decomposition(
     for site in usage_sites:
         path = str(site["path"])
         suffix = hashlib.sha1(path.encode("utf-8")).hexdigest()[:10]
+        site_content = str(site.get("content", ""))
+        legacy_bindings = _legacy_binding_names(site_content, package)
+        reference_counts = _binding_reference_counts(site_content, legacy_bindings)
+        member_uses = _binding_member_uses(site_content, legacy_bindings)
         tasks.append({
             "task_id": f"{task_id}-site-{suffix}",
             "parent_task_id": task_id,
@@ -149,6 +250,9 @@ def build_usage_site_decomposition(
                 "Do not modify package.json or any other file."
             ),
             "legacy_package": package,
+            "legacy_bindings": sorted(legacy_bindings),
+            "legacy_binding_reference_counts": reference_counts,
+            "legacy_member_uses": member_uses,
             "target_profile": parent.get("target_profile", {}),
             "recipe": parent.get("recipe"),
             "allowed_changes": [path],
@@ -173,8 +277,11 @@ def build_usage_site_decomposition(
             "model_instruction": (
                 f"Modify ONLY {path}. Migrate the deprecated {package} usage in this file while preserving "
                 "the observable HTTP behavior used by these tests. package.json is read-only context and must "
-                "not be edited. Return only exact old_text → new_text edit operations copied from this target file. "
-                "Each old_text must be unique in the file. Do not return a diff, line numbers, or the complete file."
+                "not be edited. The task includes legacy_bindings, legacy_binding_reference_counts, and "
+                "legacy_member_uses. Your edits MUST eliminate every executable reference to every listed legacy "
+                "binding, including all listed member uses such as get/post/jar. Return only exact old_text → "
+                "new_text edit operations copied from this target file. Each old_text must be unique in the file. "
+                "Do not return a diff, line numbers, or the complete file."
             ),
             "evaluation_dimensions": [
                 "patch-applies-cleanly",
