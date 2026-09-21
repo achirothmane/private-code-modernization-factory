@@ -102,9 +102,9 @@ class UsageSiteDecompositionTests(unittest.TestCase):
                 )
                 self.assertNotIn("package.json", task["allowed_changes"])
                 self.assertFalse(task["requires_full_repository_context"])
-                self.assertEqual(task["response_mode"], "replacement-content")
+                self.assertEqual(task["response_mode"], "edit-operations")
 
-    def test_replacement_content_is_converted_to_deterministic_unified_diff(self):
+    def test_edit_operations_are_converted_to_deterministic_unified_diff(self):
         with TemporaryDirectory() as td:
             root = Path(td)
             plan = self._repo(root)
@@ -116,10 +116,6 @@ class UsageSiteDecompositionTests(unittest.TestCase):
                 model="fixture-model",
             )
             target = str(task["target"])
-            replacement = (
-                "var fetch = require('node-fetch');\n"
-                "fetch('http://example.test/a').then(function () {});\n"
-            )
 
             class FakeAdapter:
                 provider = "fixture"
@@ -127,14 +123,25 @@ class UsageSiteDecompositionTests(unittest.TestCase):
 
                 def invoke(self, _request):
                     return {
-                        "replacement_content": replacement,
+                        "edits": [
+                            {
+                                "old_text": (
+                                    "var request = require('request');\n"
+                                    "request.get('http://example.test/a', function () {});\n"
+                                ),
+                                "new_text": (
+                                    "var fetch = require('node-fetch');\n"
+                                    "fetch('http://example.test/a').then(function () {});\n"
+                                ),
+                            }
+                        ],
                         "rationale": "Migrate one usage-site.",
                         "usage": {"input_tokens": 300, "output_tokens": 80},
                         "cost_usd": None,
                     }
 
             response = run_model_request(request, FakeAdapter())
-            self.assertEqual(response["provider_response_mode"], "replacement-content")
+            self.assertEqual(response["provider_response_mode"], "edit-operations")
             self.assertEqual(len(response["replacement_sha256"]), 64)
             self.assertIn(f"--- a/{target}", response["unified_diff"])
             self.assertIn(f"+++ b/{target}", response["unified_diff"])
@@ -143,6 +150,38 @@ class UsageSiteDecompositionTests(unittest.TestCase):
             score = score_usage_site_response(root, request, response)
             self.assertEqual(score["status"], "REVIEW", score)
             self.assertEqual(score["dependency_requirements"], ["node-fetch"])
+
+    def test_edit_operations_require_exact_unique_old_text(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            plan = self._repo(root)
+            task = plan["tasks"][0]
+            request = build_model_request(
+                plan,
+                str(task["task_id"]),
+                provider="fixture",
+                model="fixture-model",
+            )
+
+            class FakeAdapter:
+                provider = "fixture"
+                model = "fixture-model"
+
+                def invoke(self, _request):
+                    return {
+                        "edits": [
+                            {
+                                "old_text": "not present in target",
+                                "new_text": "replacement",
+                            }
+                        ],
+                        "rationale": "bad fixture",
+                        "usage": {},
+                        "cost_usd": None,
+                    }
+
+            with self.assertRaisesRegex(ValueError, "match exactly once"):
+                run_model_request(request, FakeAdapter())
 
     def test_partial_score_accepts_one_file_and_reports_new_dependency(self):
         with TemporaryDirectory() as td:
