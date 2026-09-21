@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from modfactory.model_bench import (
+    OpenAICompatibleAdapter,
     build_model_request,
     inspect_unified_diff,
     run_model_request,
@@ -102,6 +104,59 @@ class ModelBenchmarkTests(unittest.TestCase):
                 "cost_usd": 0.0123,
             },
         }
+
+    def test_openai_compatible_adapter_parses_structured_chat_completion(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            plan, _ = self._request_repo(root)
+            task_id = str(plan["tasks"][0]["task_id"])
+            request = build_model_request(
+                plan,
+                task_id,
+                provider="local-compatible",
+                model="fixture-model",
+            )
+
+            class FakeHTTPResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    body = {
+                        "id": "local-test-1",
+                        "model": "fixture-model",
+                        "choices": [{
+                            "message": {
+                                "content": json.dumps({
+                                    "unified_diff": "--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-old\n+new\n",
+                                    "rationale": "fixture",
+                                }),
+                            },
+                        }],
+                        "usage": {
+                            "prompt_tokens": 123,
+                            "completion_tokens": 45,
+                        },
+                    }
+                    return json.dumps(body).encode("utf-8")
+
+            adapter = OpenAICompatibleAdapter(
+                provider="local-compatible",
+                endpoint="http://127.0.0.1:8080/v1/chat/completions",
+                model="fixture-model",
+            )
+            with patch("urllib.request.urlopen", return_value=FakeHTTPResponse()):
+                result = adapter.invoke(request)
+
+            self.assertEqual(result["provider_request_id"], "local-test-1")
+            self.assertEqual(result["provider_model_returned"], "fixture-model")
+            self.assertEqual(result["usage"]["input_tokens"], 123)
+            self.assertEqual(result["usage"]["output_tokens"], 45)
+            self.assertIsNone(result["cost_usd"])
+            self.assertEqual(result["rationale"], "fixture")
 
     def test_provider_neutral_runner_measures_latency_and_preserves_provider_usage(self):
         with TemporaryDirectory() as td:

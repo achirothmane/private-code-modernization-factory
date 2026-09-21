@@ -1,0 +1,163 @@
+name: Wave 7H Stronger Ordinary Model Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+
+      - name: Fetch pinned semantic survivor
+        run: python benchmarks/fetch_corpus.py benchmarks/wave7f-corpus.json .wave7h-corpus
+
+      - name: Build exact evaluation plan
+        run: |
+          modfactory eval-plan .wave7h-corpus/auth0-node-wsfed-request-tests \
+            --output wave7h-plan
+
+      - name: Install pinned llama.cpp CPU binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o llama-b11057-bin-ubuntu-x64.tar.gz \
+            https://github.com/ggml-org/llama.cpp/releases/download/b11057/llama-b11057-bin-ubuntu-x64.tar.gz
+          echo "fa7532f45d5b1c47696afb1cb7c334692262404c81ecc8e28b14dc273796289f  llama-b11057-bin-ubuntu-x64.tar.gz" | sha256sum -c -
+          mkdir -p .llama
+          tar -xzf llama-b11057-bin-ubuntu-x64.tar.gz -C .llama
+
+      - name: Download pinned Qwen2.5-Coder 7B Q4_K_M
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 --retry-delay 5 \
+            -o qwen2.5-coder-7b-instruct-q4_k_m.gguf \
+            "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf?download=true"
+          echo "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c  qwen2.5-coder-7b-instruct-q4_k_m.gguf" | sha256sum -c -
+
+      - name: Start local llama.cpp server
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVER_BIN=$(find .llama -name llama-server -type f | head -1)
+          test -n "$SERVER_BIN"
+          chmod +x "$SERVER_BIN"
+          nohup "$SERVER_BIN" \
+            -m "$PWD/qwen2.5-coder-7b-instruct-q4_k_m.gguf" \
+            -c 20480 \
+            -t 4 \
+            --host 127.0.0.1 \
+            --port 8080 \
+            > wave7h-llama.log 2>&1 &
+          echo $! > wave7h-llama.pid
+          for i in $(seq 1 180); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat wave7h-llama.log
+          exit 1
+
+      - name: Build benchmark request from loaded model identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sf http://127.0.0.1:8080/v1/models > wave7h-models.json
+          MODEL_ID=$(python -c "import json; print(json.load(open('wave7h-models.json'))['data'][0]['id'])")
+          TASK_ID=$(python -c "import json; print(json.load(open('wave7h-plan/model-eval/plan.json'))['tasks'][0]['task_id'])")
+          modfactory model-request wave7h-plan/model-eval/plan.json \
+            --task-id "$TASK_ID" \
+            --provider llama-cpp \
+            --model "$MODEL_ID" \
+            --output wave7h-benchmark
+
+      - name: Run stronger local model inference
+        id: inference
+        run: |
+          modfactory model-run-compatible \
+            --request wave7h-benchmark/model-bench/request.json \
+            --endpoint http://127.0.0.1:8080/v1/chat/completions \
+            --output wave7h-benchmark \
+            --timeout 2100 \
+            --max-tokens 2048
+
+      - name: Score response statically
+        if: always() && steps.inference.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          modfactory model-score .wave7h-corpus/auth0-node-wsfed-request-tests \
+            --request wave7h-benchmark/model-bench/request.json \
+            --response wave7h-benchmark/model-bench/response.json \
+            --output wave7h-benchmark
+          SCORE_RC=$?
+          echo "$SCORE_RC" > wave7h-benchmark/model-bench/score-exit-code.txt
+          exit 0
+
+      - name: Emit machine-readable run summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          base = Path("wave7h-benchmark/model-bench")
+          request = json.loads((base / "request.json").read_text()) if (base / "request.json").exists() else None
+          response = json.loads((base / "response.json").read_text()) if (base / "response.json").exists() else None
+          score = json.loads((base / "score.json").read_text()) if (base / "score.json").exists() else None
+          summary = {
+              "schema_version": 1,
+              "benchmark_id": request.get("benchmark_id") if request else None,
+              "task_id": request.get("task_id") if request else None,
+              "provider": response.get("provider") if response else "llama-cpp",
+              "model_requested": request.get("model") if request else None,
+              "model_returned": response.get("provider_model_returned") if response else None,
+              "provider_request_id": response.get("provider_request_id") if response else None,
+              "metrics": response.get("metrics") if response else None,
+              "metrics_source": response.get("metrics_source") if response else None,
+              "provider_metadata": response.get("provider_metadata") if response else None,
+              "score_status": score.get("status") if score else None,
+              "score_reason": score.get("reason") if score else None,
+              "static_quality": score.get("static_quality") if score else None,
+              "gates": score.get("gates") if score else None,
+              "real_provider_invoked": response is not None,
+              "project_code_executed": False,
+          }
+          base.mkdir(parents=True, exist_ok=True)
+          (base / "run-summary.json").write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Capture runtime logs
+        if: always()
+        run: |
+          mkdir -p wave7h-runtime
+          cp wave7h-llama.log wave7h-runtime/llama.log || true
+          cp wave7h-models.json wave7h-runtime/models.json || true
+          sha256sum qwen2.5-coder-7b-instruct-q4_k_m.gguf > wave7h-runtime/model.sha256 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modfactory-wave7h-stronger-ordinary-model
+          path: |
+            wave7h-plan/model-eval/
+            wave7h-benchmark/model-bench/
+            wave7h-runtime/
+          if-no-files-found: error
+
+      - name: Require measured response artifact
+        if: always()
+        run: |
+          test -f wave7h-benchmark/model-bench/response.json
+          test -f wave7h-benchmark/model-bench/run-summary.json

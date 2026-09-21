@@ -306,6 +306,52 @@ The in-process provider-neutral runner is covered by a fake adapter test that pr
 
 Wave 7G therefore closes the **measurement infrastructure** gap. It does **not** claim a model quality result yet.
 
+## Wave 7H: First Measured Ordinary-Model Benchmarks
+
+Wave 7H executed real local inference on the exact Wave 7F/7G benchmark `126397b865a6199a` instead of inferring model capability from repository size.
+
+The task remained unchanged:
+
+- repository: `auth0/node-wsfed@3bd751a1749d8746b981ce0e8daabe9eaec654b0`
+- migration: deprecated `request~2.88.2` in seven test-suite usage sites
+- context files: 8
+- prompt context: 13,184 provider-reported input tokens
+- context band: small
+- full-repository context required: false
+- project code executed: false
+
+Two pinned local Qwen2.5-Coder baselines were run through `llama.cpp b11057` on GitHub Actions CPU:
+
+| Model | GGUF SHA-256 | Input tokens | Output tokens | Wall latency | Prompt throughput | Generation throughput | Score |
+|---|---|---:|---:|---:|---:|---:|---|
+| Qwen2.5-Coder 3B Instruct Q4_K_M | `724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7` | 13,184 | 805 | 857,983.985 ms | 18.56 tok/s | 5.45 tok/s | FAIL — patch did not apply cleanly |
+| Qwen2.5-Coder 7B Instruct Q4_K_M | `509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c` | 13,184 | 98 | 571,535.098 ms | 24.12 tok/s | 3.91 tok/s | FAIL — invalid unified diff |
+
+The lower total latency of the 7B run is not a speed win: it stopped after only 98 output tokens. Its per-token generation throughput was lower than the 3B run.
+
+### 3B failure
+
+The 3B model returned a diff touching only `package.json`. Its rationale claimed the usage sites had been migrated, but the diff contained no test-file changes. The scorer accepted the response envelope, diff structure, and allowlist scope, then rejected the patch at `git apply --check` with `patch-does-not-apply-cleanly`.
+
+### 7B failure
+
+The 7B model returned only a hunk changing `request` to `axios`, without file headers. The scorer rejected it immediately as `unified-diff-invalid`.
+
+Neither model reached semantic before/after verification or project tests.
+
+### Compute conclusion
+
+These failures do **not** justify long-context or B300-class compute:
+
+- task context is already small;
+- both models saw all seven usage sites;
+- failure occurred at patch protocol/completeness before semantic verification;
+- increasing parameters from ~3.4B to ~7.6B did not produce a valid patch.
+
+The next gate is therefore **DECOMPOSE_BEFORE_SCALE**: split one eight-file semantic migration into smaller file-scoped patch tasks, aggregate only validated partial patches, and re-run the same evidence gates before considering a stronger remote model or larger hardware.
+
+No API model charges were measured. `cost_usd` remains null because local inference used GitHub Actions compute whose monetary cost was not attributed by the benchmark.
+
 ## Compute gate
 
 Repository size, legacy syntax, or an expensive-looking migration never justifies expensive compute by itself.
@@ -320,7 +366,9 @@ A model benchmark is allowed only after a genuine semantic candidate survives:
 
 A long-context benchmark additionally requires task-level evidence that the minimized context is still large. A B300-class benchmark is allowed only if a smaller/ordinary model benchmark is insufficient and measured quality, latency, throughput, or total cost can plausibly improve.
 
-Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
+Wave 7H measured two local ordinary models. Both failed before semantic verification while task context remained small. The current post-benchmark gate is **DECOMPOSE_BEFORE_SCALE**.
+
+Current B300 decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 
 ## Reproducible corpora
 
@@ -332,6 +380,8 @@ Current decision: **NOT_JUSTIFIED_BY_CURRENT_EVIDENCE**.
 - .github/workflows/semantic-benchmark.yml — manual Wave 7C–7E target-aware benchmark, deterministic proposal evidence, and model-evaluation-plan artifact.
 - .github/workflows/wave7f-semantic-survivor.yml — manual first-survivor benchmark.
 - .github/workflows/wave7g-runner-contract.yml — manual provider-neutral request-contract validation.
+- .github/workflows/wave7h-local-ordinary-model.yml — manual pinned 3B local-model benchmark.
+- .github/workflows/wave7h-local-7b-model.yml — manual pinned 7B local-model comparison.
 
 Artifacts are uploaded even when a corpus item fails, preserving diagnostic evidence.
 
@@ -397,7 +447,8 @@ General imp → importlib remains blocked until its semantics can be encoded and
 7E. ✅ Deterministic Falsification Before Model Inference — 4/4 real React 18 tasks converted to verified deterministic proposals; model benchmark cancelled for this case.
 7F. ✅ First Real Semantic Survivor — Auth0 node-wsfed test-suite request migration survives all current gates; exact 8-file bundle, 38,731 characters, model benchmark justified but not yet executed.
 7G. ✅ Provider-Neutral Model Runner + Scorer — exact task/request hashing, repository baseline identity, safe diff application, provider adapter contract, latency/token/cost envelope, and real Auth0 request artifact.
-7H. Connect one measured inference provider and run the first ordinary-model benchmark on benchmark `126397b865a6199a`; do not escalate to long-context/B300 unless measured evidence demands it.
+7H. ✅ First Measured Ordinary-Model Benchmarks — pinned 3B and 7B Qwen2.5-Coder local inference on `126397b865a6199a`; both failed patch protocol/completeness gates, so long-context/B300 escalation remains closed.
+7I. Usage-Site Decomposition — split multi-file semantic migrations into file-scoped model tasks, validate each partial patch independently, then aggregate before any stronger-model escalation.
 
 ## Principle
 
