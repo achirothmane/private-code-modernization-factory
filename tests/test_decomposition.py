@@ -103,6 +103,10 @@ class UsageSiteDecompositionTests(unittest.TestCase):
                 self.assertNotIn("package.json", task["allowed_changes"])
                 self.assertFalse(task["requires_full_repository_context"])
                 self.assertEqual(task["response_mode"], "edit-operations")
+                self.assertEqual(task["legacy_bindings"], ["request"])
+                self.assertEqual(task["legacy_binding_reference_counts"], {"request": 2})
+                expected_member = "get" if str(task["target"]).endswith("a.test.js") else "post"
+                self.assertEqual(task["legacy_member_uses"], {"request": {expected_member: 1}})
 
     def test_edit_operations_are_converted_to_deterministic_unified_diff(self):
         with TemporaryDirectory() as td:
@@ -207,6 +211,66 @@ class UsageSiteDecompositionTests(unittest.TestCase):
             self.assertTrue(score["gates"]["local_legacy_usage_removed"])
             self.assertEqual(score["dependency_requirements"], ["node-fetch"])
             self.assertEqual(score["static_quality"]["ratio"], 1.0)
+
+    def test_string_and_comment_mentions_do_not_count_as_legacy_binding_references(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "test").mkdir()
+            target = root / "test" / "mentions.test.js"
+            target.write_text(
+                "var request = require('request');\n"
+                "// request.get in a comment should not count\n"
+                "describe('request to metadata', function () {\n"
+                "  request.get('http://example.test', function () {});\n"
+                "});\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"test": "node test/mentions.test.js"},
+                    "devDependencies": {"request": "~2.88.2"},
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n      - run: npm test\n",
+                encoding="utf-8",
+            )
+            snapshot = scan_repository(root)
+            parent = build_model_evaluation_plan(root, snapshot)
+            parent_id = str(parent["tasks"][0]["task_id"])
+            plan = build_usage_site_decomposition(parent, parent_id)
+            task = plan["tasks"][0]
+            self.assertEqual(task["legacy_binding_reference_counts"], {"request": 2})
+            self.assertEqual(task["legacy_member_uses"], {"request": {"get": 1}})
+
+            request = build_model_request(
+                plan,
+                str(task["task_id"]),
+                provider="fixture",
+                model="fixture-model",
+            )
+            before = target.read_text(encoding="utf-8")
+            after = before.replace(
+                "var request = require('request');",
+                "var fetch = require('node-fetch');",
+            ).replace(
+                "  request.get('http://example.test', function () {});",
+                "  fetch('http://example.test').then(function () {});",
+            )
+            diff = "".join(difflib.unified_diff(
+                before.splitlines(keepends=True),
+                after.splitlines(keepends=True),
+                fromfile="a/test/mentions.test.js",
+                tofile="b/test/mentions.test.js",
+            ))
+            response = self._response(request, diff)
+            score = score_usage_site_response(root, request, response)
+
+            self.assertEqual(score["status"], "REVIEW", score)
+            self.assertTrue(score["gates"]["legacy_binding_references_removed"])
+            self.assertEqual(score["remaining_legacy_binding_references"], [])
 
     def test_partial_score_rejects_dangling_legacy_binding_reference(self):
         with TemporaryDirectory() as td:
