@@ -1,0 +1,129 @@
+name: Wave 7I Focused Exact-Edit Probe
+
+on:
+  push:
+    branches:
+      - wave7i-usage-site-decomposition
+    paths:
+      - ".github/workflows/wave7i-focused-exact-edit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+
+      - name: Fetch pinned semantic survivor
+        run: python benchmarks/fetch_corpus.py benchmarks/wave7f-corpus.json .wave7i-corpus
+
+      - name: Build decomposition
+        shell: bash
+        run: |
+          modfactory eval-plan .wave7i-corpus/auth0-node-wsfed-request-tests --output parent
+          TASK_ID=$(python -c "import json; print(json.load(open('parent/model-eval/plan.json'))['tasks'][0]['task_id'])")
+          modfactory decompose-plan parent/model-eval/plan.json --task-id "$TASK_ID" --output decomp
+
+      - name: Install pinned llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 -o llama.tar.gz             https://github.com/ggml-org/llama.cpp/releases/download/b11057/llama-b11057-bin-ubuntu-x64.tar.gz
+          echo "fa7532f45d5b1c47696afb1cb7c334692262404c81ecc8e28b14dc273796289f  llama.tar.gz" | sha256sum -c -
+          mkdir .llama
+          tar -xzf llama.tar.gz -C .llama
+
+      - name: Download pinned 3B model
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 --retry-delay 5             -o model.gguf             "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf?download=true"
+          echo "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7  model.gguf" | sha256sum -c -
+
+      - name: Start model server
+        shell: bash
+        run: |
+          SERVER_BIN=$(find .llama -name llama-server -type f | head -1)
+          chmod +x "$SERVER_BIN"
+          nohup "$SERVER_BIN" -m "$PWD/model.gguf" -c 8192 -t 4             --host 127.0.0.1 --port 8080 > llama.log 2>&1 &
+          for i in $(seq 1 120); do
+            curl -sf http://127.0.0.1:8080/health >/dev/null && exit 0
+            sleep 2
+          done
+          cat llama.log
+          exit 1
+
+      - name: Run focused exact-edit inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="test/wsfed-sha1.tests.js"
+          TASK_ID=$(python - <<'PY'
+          import json
+          p=json.load(open("decomp/decomposition/plan.json"))
+          target="test/wsfed-sha1.tests.js"
+          print(next(t["task_id"] for t in p["tasks"] if t["target"]==target))
+          PY
+          )
+          MODEL_ID=$(curl -sf http://127.0.0.1:8080/v1/models | python -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])")
+          modfactory model-request decomp/decomposition/plan.json             --task-id "$TASK_ID" --provider llama-cpp --model "$MODEL_ID" --output probe
+
+          set +e
+          modfactory model-run-compatible             --request probe/model-bench/request.json             --endpoint http://127.0.0.1:8080/v1/chat/completions             --output probe --timeout 600 --max-tokens 1024
+          RUN_RC=$?
+          echo "$RUN_RC" > probe/model-run-exit-code.txt
+
+          if [ -f probe/model-bench/response.json ]; then
+            modfactory decompose-score .wave7i-corpus/auth0-node-wsfed-request-tests               --request probe/model-bench/request.json               --response probe/model-bench/response.json               --output probe
+            echo "$?" > probe/decompose-score-exit-code.txt
+          fi
+          set -e
+
+      - name: Emit summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          base=Path("probe")
+          reqp=base/"model-bench"/"request.json"
+          resp=base/"model-bench"/"response.json"
+          scorep=base/"decomposition-score"/"score.json"
+          req=json.loads(reqp.read_text()) if reqp.exists() else None
+          res=json.loads(resp.read_text()) if resp.exists() else None
+          score=json.loads(scorep.read_text()) if scorep.exists() else None
+          summary={
+            "task_id": req.get("task_id") if req else None,
+            "response_mode": req.get("task",{}).get("response_mode") if req else None,
+            "provider_invoked": res is not None,
+            "metrics": res.get("metrics") if res else None,
+            "generated_diff": res.get("unified_diff") if res else None,
+            "score_status": score.get("status") if score else None,
+            "score_reason": score.get("reason") if score else None,
+            "gates": score.get("gates") if score else None,
+            "remaining_legacy_binding_references": score.get("remaining_legacy_binding_references") if score else None,
+            "dependency_requirements": score.get("dependency_requirements") if score else None,
+            "project_code_executed": False
+          }
+          Path("focused-summary.json").write_text(json.dumps(summary,indent=2))
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modfactory-wave7i-focused-exact-edit
+          path: |
+            decomp/decomposition/
+            probe/
+            focused-summary.json
+            llama.log
+          if-no-files-found: error
