@@ -208,6 +208,63 @@ class UsageSiteDecompositionTests(unittest.TestCase):
             self.assertEqual(score["dependency_requirements"], ["node-fetch"])
             self.assertEqual(score["static_quality"]["ratio"], 1.0)
 
+    def test_partial_score_rejects_dangling_legacy_binding_reference(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "test").mkdir()
+            target = root / "test" / "jar.test.js"
+            target.write_text(
+                "var request = require('request');\n"
+                "request.get({ jar: request.jar(), uri: 'http://example.test' }, function () {});\n",
+                encoding="utf-8",
+            )
+            (root / "package.json").write_text(
+                json.dumps({
+                    "scripts": {"test": "node test/jar.test.js"},
+                    "devDependencies": {"request": "~2.88.2"},
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n      - run: npm test\n",
+                encoding="utf-8",
+            )
+            snapshot = scan_repository(root)
+            parent = build_model_evaluation_plan(root, snapshot)
+            parent_id = str(parent["tasks"][0]["task_id"])
+            plan = build_usage_site_decomposition(parent, parent_id)
+            task = plan["tasks"][0]
+            request = build_model_request(
+                plan,
+                str(task["task_id"]),
+                provider="fixture",
+                model="fixture-model",
+            )
+            before = target.read_text(encoding="utf-8")
+            after = before.replace(
+                "var request = require('request');",
+                "var fetch = require('node-fetch');",
+            ).replace(
+                "request.get(",
+                "fetch(",
+                1,
+            )
+            diff = "".join(difflib.unified_diff(
+                before.splitlines(keepends=True),
+                after.splitlines(keepends=True),
+                fromfile="a/test/jar.test.js",
+                tofile="b/test/jar.test.js",
+            ))
+            response = self._response(request, diff)
+
+            score = score_usage_site_response(root, request, response)
+
+            self.assertEqual(score["status"], "FAIL", score)
+            self.assertEqual(score["reason"], "partial-static-regression")
+            self.assertFalse(score["gates"]["legacy_binding_references_removed"])
+            self.assertEqual(score["remaining_legacy_binding_references"], ["request"])
+
     def test_partial_score_rejects_package_json_change(self):
         with TemporaryDirectory() as td:
             root = Path(td)
