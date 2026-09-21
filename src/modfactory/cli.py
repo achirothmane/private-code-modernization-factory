@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from pathlib import Path
 
 from .benchmark import benchmark_corpus, write_benchmark
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
@@ -24,6 +25,13 @@ from .report import write_report
 from .scanner import scan_repository
 from .verification import build_differential_verification, write_verification
 from .targets import parse_target_args
+from .decomposition import (
+    aggregate_usage_site_responses,
+    build_usage_site_decomposition,
+    score_usage_site_response,
+    write_decomposition_score,
+    write_usage_site_decomposition,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,6 +117,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--bearer-token-env",
         help="Optional environment variable containing a bearer token; omitted for local endpoints",
     )
+
+    decompose = sub.add_parser(
+        "decompose-plan",
+        help="Split one eligible npm semantic task into file-scoped usage-site tasks",
+    )
+    decompose.add_argument("plan", help="Path to parent model-eval plan.json")
+    decompose.add_argument("--task-id", required=True, help="Parent semantic task ID")
+    decompose.add_argument("--output", default=".modfactory", help="Output directory")
+
+    decompose_score = sub.add_parser(
+        "decompose-score",
+        help="Score one file-scoped usage-site model response",
+    )
+    decompose_score.add_argument("repository", help="Path to repository")
+    decompose_score.add_argument("--request", required=True, help="Path to file-scoped request.json")
+    decompose_score.add_argument("--response", required=True, help="Path to provider response.json")
+    decompose_score.add_argument("--output", default=".modfactory", help="Output directory")
+
+    decompose_aggregate = sub.add_parser(
+        "decompose-aggregate",
+        help="Aggregate only statically accepted usage-site responses",
+    )
+    decompose_aggregate.add_argument("repository", help="Path to repository")
+    decompose_aggregate.add_argument("--plan", required=True, help="Path to decomposition plan.json")
+    decompose_aggregate.add_argument(
+        "--pair",
+        action="append",
+        nargs=2,
+        metavar=("REQUEST", "RESPONSE"),
+        default=[],
+        help="Request/response pair; repeat once per usage-site task",
+    )
+    decompose_aggregate.add_argument("--output", default=".modfactory", help="Output directory")
     for command_parser in (analyze, propose, verify, bench, eval_plan):
         command_parser.add_argument(
             "--target",
@@ -230,6 +271,66 @@ def main(argv: list[str] | None = None) -> int:
         print("Provider invoked: false")
         print(f"Request: {path}")
         return 0
+
+    if args.command == "decompose-plan":
+        try:
+            plan = load_request(args.plan)
+            decomposed = build_usage_site_decomposition(plan, args.task_id)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        json_path, jsonl_path, md_path = write_usage_site_decomposition(decomposed, args.output)
+        print(f"Usage-site tasks: {decomposed['eligible_tasks']}")
+        print(f"Next gate: {decomposed['compute_policy']['next_gate']}")
+        print(f"JSON: {json_path}")
+        print(f"JSONL: {jsonl_path}")
+        print(f"Markdown: {md_path}")
+        return 0
+
+    if args.command == "decompose-score":
+        try:
+            request = load_request(args.request)
+            response = load_response(args.response)
+            score = score_usage_site_response(args.repository, request, response)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        json_path, md_path = write_decomposition_score(score, args.output)
+        print(f"Partial score status: {score['status']}")
+        print(f"Reason: {score['reason']}")
+        print(f"JSON: {json_path}")
+        print(f"Markdown: {md_path}")
+        return 0 if score["status"] == "REVIEW" else 7
+
+    if args.command == "decompose-aggregate":
+        if not args.pair:
+            print("At least one --pair REQUEST RESPONSE is required", file=sys.stderr)
+            return 2
+        try:
+            plan = load_request(args.plan)
+            requests = [load_request(pair[0]) for pair in args.pair]
+            responses = [load_response(pair[1]) for pair in args.pair]
+            aggregate = aggregate_usage_site_responses(
+                args.repository,
+                plan,
+                requests,
+                responses,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        out = Path(args.output) / "decomposition-aggregate"
+        out.mkdir(parents=True, exist_ok=True)
+        json_path = out / "aggregate.json"
+        patch_path = out / "aggregate.patch"
+        json_path.write_text(json.dumps(aggregate, indent=2, ensure_ascii=False), encoding="utf-8")
+        patch_path.write_text(str(aggregate.get("aggregate_diff", "")), encoding="utf-8")
+        print(f"Aggregate status: {aggregate['status']}")
+        print(f"Accepted usage sites: {aggregate['accepted_usage_sites']}/{aggregate['expected_usage_sites']}")
+        print(f"Dependencies observed: {aggregate['dependency_requirements']}")
+        print(f"JSON: {json_path}")
+        print(f"Patch: {patch_path}")
+        return 0 if aggregate["status"] == "READY_FOR_MANIFEST_FINALIZATION" else 7
 
     if args.command == "model-run-compatible":
         if args.timeout < 1 or args.max_tokens < 1:
