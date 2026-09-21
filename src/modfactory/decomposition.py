@@ -48,6 +48,33 @@ def _legacy_package(task: dict[str, object]) -> str | None:
     return None
 
 
+def _legacy_binding_names(text: str, package: str) -> set[str]:
+    quoted = re.escape(package)
+    patterns = (
+        re.compile(
+            rf"""\b(?:var|let|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]{quoted}['"]\s*\)"""
+        ),
+        re.compile(
+            rf"""\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]{quoted}['"]"""
+        ),
+        re.compile(
+            rf"""\bimport\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]{quoted}['"]"""
+        ),
+    )
+    names: set[str] = set()
+    for pattern in patterns:
+        names.update(match.group(1) for match in pattern.finditer(text))
+    return names
+
+
+def _binding_references(text: str, names: set[str]) -> list[str]:
+    return sorted(
+        name
+        for name in names
+        if re.search(rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])", text)
+    )
+
+
 def _external_packages(text: str) -> set[str]:
     packages: set[str] = set()
     for pattern in IMPORT_PATTERNS:
@@ -326,8 +353,13 @@ def score_usage_site_response(
         after_text = after_target.read_text(encoding="utf-8", errors="ignore")
         used_before = _target_still_uses_package(before_root, target, package)
         used_after = _target_still_uses_package(after_root, target, package)
+        legacy_bindings = _legacy_binding_names(before_text, package)
+        remaining_binding_references = _binding_references(after_text, legacy_bindings)
         gates["legacy_usage_present_before"] = used_before
         gates["local_legacy_usage_removed"] = used_before and not used_after
+        gates["legacy_binding_references_removed"] = not remaining_binding_references
+        base["legacy_bindings"] = sorted(legacy_bindings)
+        base["remaining_legacy_binding_references"] = remaining_binding_references
 
         before_snapshot = scan_repository(before_root)
         after_snapshot = scan_repository(after_root)
@@ -348,6 +380,7 @@ def score_usage_site_response(
             "patch_applies_cleanly",
             "legacy_usage_present_before",
             "local_legacy_usage_removed",
+            "legacy_binding_references_removed",
             "no_new_findings",
             "risk_non_increasing",
         )
