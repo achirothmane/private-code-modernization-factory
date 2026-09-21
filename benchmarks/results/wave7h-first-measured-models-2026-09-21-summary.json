@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "wave": "7H",
+  "title": "First Measured Ordinary-Model Benchmarks",
+  "benchmark_id": "126397b865a6199a",
+  "task_id": "model-d866304f07",
+  "candidate": {
+    "repo": "auth0/node-wsfed",
+    "commit": "3bd751a1749d8746b981ce0e8daabe9eaec654b0",
+    "usage_sites": 7,
+    "context_files": 8,
+    "input_tokens": 13184,
+    "full_repository_context": false
+  },
+  "invalidated_provider_attempt": {
+    "provider": "github-models",
+    "workflow_run_id": 35488246768,
+    "outcome": "HTTP 410 github_models_retirement_brownout",
+    "counted_as_model_quality_result": false
+  },
+  "runs": [
+    {
+      "label": "qwen2.5-coder-3b-instruct-q4_k_m",
+      "workflow_run_id": 35488493217,
+      "artifact_id": 10598850015,
+      "llama_cpp": "b11057",
+      "model_sha256": "724fb256bec1ff062b2f65e4569e871ad2e95ab2a3989723d1769c54294730b7",
+      "parameters": 3397103616,
+      "model_bytes": 2098976768,
+      "context_size": 24576,
+      "input_tokens": 13184,
+      "output_tokens": 805,
+      "latency_ms": 857983.985,
+      "prompt_tokens_per_second": 18.56,
+      "generation_tokens_per_second": 5.45,
+      "cost_usd": null,
+      "score_status": "FAIL",
+      "score_reason": "patch-does-not-apply-cleanly",
+      "project_code_executed": false
+    },
+    {
+      "label": "qwen2.5-coder-7b-instruct-q4_k_m",
+      "workflow_run_id": 35598656962,
+      "artifact_id": 10638450540,
+      "llama_cpp": "b11057",
+      "model_sha256": "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
+      "parameters": 7615616512,
+      "model_bytes": 4677120000,
+      "context_size": 20480,
+      "input_tokens": 13184,
+      "output_tokens": 98,
+      "latency_ms": 571535.098,
+      "prompt_tokens_per_second": 24.12,
+      "generation_tokens_per_second": 3.91,
+      "cost_usd": null,
+      "score_status": "FAIL",
+      "score_reason": "unified-diff-invalid",
+      "project_code_executed": false
+    }
+  ],
+  "compute_decision": {
+    "long_context_justified": false,
+    "b300_benchmark_justified": false,
+    "b300_rental_recommended": false,
+    "next_gate": "DECOMPOSE_BEFORE_SCALE"
+  },
+  "conclusion": "Two measured local ordinary models failed patch protocol/completeness gates on a small-context task. Decompose the migration before scaling model size or hardware."
+}
