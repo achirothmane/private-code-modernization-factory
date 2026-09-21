@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from modfactory.model_bench import (
-    GitHubModelsAdapter,
+    OpenAICompatibleAdapter,
     build_model_request,
     inspect_unified_diff,
     run_model_request,
@@ -105,7 +105,7 @@ class ModelBenchmarkTests(unittest.TestCase):
             },
         }
 
-    def test_github_models_adapter_parses_structured_chat_completion(self):
+    def test_openai_compatible_adapter_parses_structured_chat_completion(self):
         with TemporaryDirectory() as td:
             root = Path(td)
             plan, _ = self._request_repo(root)
@@ -113,8 +113,8 @@ class ModelBenchmarkTests(unittest.TestCase):
             request = build_model_request(
                 plan,
                 task_id,
-                provider="github-models",
-                model="openai/gpt-4.1-mini",
+                provider="local-compatible",
+                model="fixture-model",
             )
 
             class FakeHTTPResponse:
@@ -126,8 +126,8 @@ class ModelBenchmarkTests(unittest.TestCase):
 
                 def read(self):
                     body = {
-                        "id": "ghm-test-1",
-                        "model": "openai/gpt-4.1-mini",
+                        "id": "local-test-1",
+                        "model": "fixture-model",
                         "choices": [{
                             "message": {
                                 "content": json.dumps({
@@ -143,15 +143,16 @@ class ModelBenchmarkTests(unittest.TestCase):
                     }
                     return json.dumps(body).encode("utf-8")
 
-            adapter = GitHubModelsAdapter(
-                token="fixture-token",
-                model="openai/gpt-4.1-mini",
+            adapter = OpenAICompatibleAdapter(
+                provider="local-compatible",
+                endpoint="http://127.0.0.1:8080/v1/chat/completions",
+                model="fixture-model",
             )
             with patch("urllib.request.urlopen", return_value=FakeHTTPResponse()):
                 result = adapter.invoke(request)
 
-            self.assertEqual(result["provider_request_id"], "ghm-test-1")
-            self.assertEqual(result["provider_model_returned"], "openai/gpt-4.1-mini")
+            self.assertEqual(result["provider_request_id"], "local-test-1")
+            self.assertEqual(result["provider_model_returned"], "fixture-model")
             self.assertEqual(result["usage"]["input_tokens"], 123)
             self.assertEqual(result["usage"]["output_tokens"], 45)
             self.assertIsNone(result["cost_usd"])
