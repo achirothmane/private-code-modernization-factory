@@ -235,6 +235,59 @@ class UsageSiteDecompositionTests(unittest.TestCase):
             self.assertEqual(score["status"], "FAIL")
             self.assertEqual(score["reason"], "single-file-scope-violation")
 
+    def test_aggregate_blocks_mixed_dependency_strategies(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            plan = self._repo(root)
+            requests = []
+            responses = []
+
+            for index, task in enumerate(plan["tasks"]):
+                request = build_model_request(
+                    plan,
+                    str(task["task_id"]),
+                    provider="fixture",
+                    model="fixture-model",
+                )
+                target = str(task["target"])
+                before = (root / target).read_text(encoding="utf-8")
+                if index == 0:
+                    after = before.replace(
+                        "var request = require('request');",
+                        "var fetch = require('node-fetch');",
+                    ).replace(
+                        "request.get('http://example.test/a', function () {});",
+                        "fetch('http://example.test/a').then(function () {});",
+                    )
+                else:
+                    after = before.replace(
+                        "const request = require('request');",
+                        "const axios = require('axios');",
+                    ).replace(
+                        "request.post({ uri: 'http://example.test/b' }, function () {});",
+                        "axios.post('http://example.test/b');",
+                    )
+                diff = "".join(difflib.unified_diff(
+                    before.splitlines(keepends=True),
+                    after.splitlines(keepends=True),
+                    fromfile=f"a/{target}",
+                    tofile=f"b/{target}",
+                ))
+                requests.append(request)
+                responses.append(self._response(request, diff))
+
+            aggregate = aggregate_usage_site_responses(
+                root,
+                plan,
+                requests,
+                responses,
+            )
+
+            self.assertEqual(aggregate["status"], "PARTIAL")
+            self.assertEqual(aggregate["reason"], "inconsistent-dependency-strategy")
+            self.assertFalse(aggregate["dependency_strategy_consistent"])
+            self.assertEqual(aggregate["dependency_requirements"], ["axios", "node-fetch"])
+
     def test_aggregate_requires_every_usage_site_then_becomes_manifest_ready(self):
         with TemporaryDirectory() as td:
             root = Path(td)
