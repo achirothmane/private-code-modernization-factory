@@ -142,11 +142,12 @@ def build_usage_site_decomposition(
             "context_characters": int(manifest.get("characters", 0)) + int(site.get("characters", 0)),
             "context_band": "small",
             "requires_full_repository_context": False,
+            "response_mode": "replacement-content",
             "model_instruction": (
                 f"Modify ONLY {path}. Migrate the deprecated {package} usage in this file while preserving "
                 "the observable HTTP behavior used by these tests. package.json is read-only context and must "
-                "not be edited. Return a complete unified diff with ---/+++ file headers for exactly this file. "
-                "Do not claim changes that are not present in the diff."
+                "not be edited. Return the COMPLETE final contents of this target file, not a diff or fragment. "
+                "Preserve every unrelated line and do not claim changes that are not present in the replacement."
             ),
             "evaluation_dimensions": [
                 "patch-applies-cleanly",
