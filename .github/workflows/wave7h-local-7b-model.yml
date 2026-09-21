@@ -1,14 +1,6 @@
 name: Wave 7H Stronger Ordinary Model Benchmark
 
 on:
-  push:
-    branches:
-      - wave7h-github-models-benchmark
-    paths:
-      - ".github/workflows/wave7h-local-7b-model.yml"
-      - "benchmarks/wave7f-corpus.json"
-      - "benchmarks/fetch_corpus.py"
-      - "src/modfactory/**"
   workflow_dispatch:
 
 permissions:
