@@ -10,7 +10,6 @@ from .benchmark import benchmark_corpus, write_benchmark
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
 from .model_eval import build_model_evaluation_plan, write_model_evaluation_plan
 from .model_bench import (
-    GitHubModelsAdapter,
     OpenAICompatibleAdapter,
     build_model_request,
     load_request,
@@ -96,15 +95,6 @@ def build_parser() -> argparse.ArgumentParser:
                              help="Explicitly allow discovered project test commands in temporary copies")
     model_score.add_argument("--timeout", type=int, default=120,
                              help="Per-command timeout in seconds when project-code execution is enabled")
-
-    github_run = sub.add_parser(
-        "model-run-github",
-        help="Run one provider-neutral benchmark request through GitHub Models using GITHUB_TOKEN",
-    )
-    github_run.add_argument("--request", required=True, help="Path to model-bench request.json")
-    github_run.add_argument("--output", default=".modfactory", help="Output directory")
-    github_run.add_argument("--timeout", type=int, default=120, help="Inference timeout in seconds")
-    github_run.add_argument("--max-tokens", type=int, default=8192, help="Maximum completion tokens")
 
     compatible_run = sub.add_parser(
         "model-run-compatible",
@@ -262,42 +252,6 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout,
                 max_tokens=args.max_tokens,
                 bearer_token=token,
-            )
-            response = run_model_request(request, adapter)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(str(exc), file=sys.stderr)
-            return 9
-        path = write_model_response(response, args.output)
-        metrics = response.get("metrics", {})
-        print(f"Provider: {response['provider']}")
-        print(f"Model requested: {response['model']}")
-        print(f"Model returned: {response.get('provider_model_returned')}")
-        print(f"Latency ms: {metrics.get('latency_ms') if isinstance(metrics, dict) else None}")
-        print(f"Input tokens: {metrics.get('input_tokens') if isinstance(metrics, dict) else None}")
-        print(f"Output tokens: {metrics.get('output_tokens') if isinstance(metrics, dict) else None}")
-        print(f"Cost USD: {metrics.get('cost_usd') if isinstance(metrics, dict) else None}")
-        print(f"Response: {path}")
-        return 0
-
-    if args.command == "model-run-github":
-        if args.timeout < 1 or args.max_tokens < 1:
-            print("--timeout and --max-tokens must be >= 1", file=sys.stderr)
-            return 2
-        token = os.environ.get("GITHUB_TOKEN", "")
-        if not token:
-            print("GITHUB_TOKEN is required for GitHub Models inference", file=sys.stderr)
-            return 8
-        try:
-            request = load_request(args.request)
-            if request.get("provider") != "github-models":
-                print("Request provider must be 'github-models'", file=sys.stderr)
-                return 2
-            model = str(request.get("model", ""))
-            adapter = GitHubModelsAdapter(
-                token=token,
-                model=model,
-                timeout_seconds=args.timeout,
-                max_tokens=args.max_tokens,
             )
             response = run_model_request(request, adapter)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
