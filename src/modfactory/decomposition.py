@@ -441,21 +441,31 @@ def aggregate_usage_site_responses(
                 for path in _npm_usage_sites(temp_root, package)
             ]
 
-    ready = not missing_targets and not remaining_usage and bool(combined)
+    dependency_strategy_consistent = len(dependency_requirements) <= 1
+    ready = (
+        not missing_targets
+        and not remaining_usage
+        and bool(combined)
+        and dependency_strategy_consistent
+    )
+    if ready:
+        reason = "all-usage-sites-statically-validated"
+    elif not dependency_strategy_consistent:
+        reason = "inconsistent-dependency-strategy"
+    else:
+        reason = "usage-sites-remain-or-partials-failed"
+
     return {
         "schema_version": 1,
         "status": "READY_FOR_MANIFEST_FINALIZATION" if ready else "PARTIAL",
-        "reason": (
-            "all-usage-sites-statically-validated"
-            if ready
-            else "usage-sites-remain-or-partials-failed"
-        ),
+        "reason": reason,
         "parent_task_id": decomposition_plan.get("parent_task_id"),
         "expected_usage_sites": len(expected),
         "accepted_usage_sites": len(covered_targets),
         "missing_targets": missing_targets,
         "remaining_legacy_usage": remaining_usage,
         "dependency_requirements": sorted(dependency_requirements),
+        "dependency_strategy_consistent": dependency_strategy_consistent,
         "aggregate_diff": combined + ("\n" if combined else ""),
         "scores": scores,
         "manifest_finalized": False,
