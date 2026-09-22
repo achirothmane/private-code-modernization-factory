@@ -109,6 +109,20 @@ def _write_diff(repo: Path, out: Path, *args: str) -> None:
     out.write_text(result.stdout, encoding="utf-8")
 
 
+def _write_behavior_contract(path: Path, case_id: str, command: str) -> None:
+    path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "commands": [{
+                "id": case_id,
+                "command": command,
+                "working_directory": ".",
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+
 def _venv(root: Path) -> tuple[Path, dict[str, str]]:
     env_dir = root / ".bench-venv"
     result = _run([sys.executable, "-m", "venv", str(env_dir)], root)
@@ -131,6 +145,7 @@ def _compact_modfactory(result: dict[str, object]) -> dict[str, object]:
         "patch_sha256": artifact.get("sha256") if isinstance(artifact, dict) else None,
         "changed_files": artifact.get("changed_files") if isinstance(artifact, dict) else None,
         "static_checks": result.get("static_checks"),
+        "behavior_contract": result.get("behavior_contract"),
         "deployment_admissible": result.get("deployment_admissible"),
     }
 
@@ -203,7 +218,13 @@ raise SystemExit(0 if result.wasSuccessful() else 1)
     )
 
 
-    probe_code = r"""
+    peewee_probe = OUTPUT / "peewee-2376-behavior-probe.py"
+    peewee_probe.write_text(
+        """import os
+import sys
+
+sys.path.insert(0, os.getcwd())
+
 from peewee import CharField, ForeignKeyField, IntegerField, Model, SqliteDatabase
 
 db = SqliteDatabase(':memory:')
@@ -226,8 +247,17 @@ db.create_tables([CharPK, CharFK])
 cpks = [CharPK.create(id=str(i), name='u%s' % i) for i in range(3)]
 ids = sorted(c.id for c in CharPK.select().where(CharPK.id << cpks))
 assert ids == ['0', '1', '2'], ids
-"""
-    probe = _run([sys.executable, "-c", probe_code], regressed, timeout=120)
+""",
+        encoding="utf-8",
+    )
+    probe = _run([sys.executable, str(peewee_probe)], regressed, timeout=120)
+
+    peewee_contract = OUTPUT / "peewee-2376-behavior-contract.json"
+    _write_behavior_contract(
+        peewee_contract,
+        "peewee-model-in-conversion",
+        f"{sys.executable} {peewee_probe}",
+    )
 
     baseline = work / "peewee-baseline"
     _clone(PEEWEE_REPO, baseline)
@@ -236,7 +266,8 @@ assert ids == ['0', '1', '2'], ids
         baseline,
         patch,
         producer=f"historical-root-cause:{PEEWEE_INTRO}",
-        allow_project_code=False,
+        behavior_contract=peewee_contract,
+        allow_project_code=True,
         provision_environments=False,
         timeout_seconds=120,
     )
@@ -315,9 +346,15 @@ def _agentscope_case(work: Path) -> dict[str, object]:
             timeout=900,
             env=env,
         )
-        probe_code = r"""
-import asyncio
+        agentscope_probe = OUTPUT / "agentscope-2055-behavior-probe.py"
+        agentscope_probe.write_text(
+            """import asyncio
+import os
+import sys
 import tempfile
+
+sys.path.insert(0, os.path.join(os.getcwd(), "src"))
+
 from agentscope.workspace import LocalWorkspace
 
 async def main():
@@ -330,8 +367,16 @@ async def main():
             await workspace.close()
 
 asyncio.run(main())
-"""
-        probe = _run([str(python), "-c", probe_code], regressed, timeout=120, env=env)
+""",
+            encoding="utf-8",
+        )
+        probe = _run([str(python), str(agentscope_probe)], regressed, timeout=120, env=env)
+        agentscope_contract = OUTPUT / "agentscope-2055-behavior-contract.json"
+        _write_behavior_contract(
+            agentscope_contract,
+            "agentscope-local-list-tools",
+            f"{python} {agentscope_probe}",
+        )
     else:
         raw_tests = {
             "argv": [],
@@ -342,6 +387,12 @@ asyncio.run(main())
             "stderr_tail": "dependency installation failed",
         }
         probe = dict(raw_tests)
+        agentscope_contract = OUTPUT / "agentscope-2055-behavior-contract.json"
+        _write_behavior_contract(
+            agentscope_contract,
+            "agentscope-local-list-tools",
+            f"{python} {OUTPUT / 'agentscope-2055-behavior-probe.py'}",
+        )
 
     baseline = work / "agentscope-baseline"
     _clone(AGENTSCOPE_REPO, baseline)
@@ -350,7 +401,8 @@ asyncio.run(main())
         baseline,
         patch,
         producer=f"historical-root-cause:{AGENTSCOPE_INTRO}",
-        allow_project_code=False,
+        behavior_contract=agentscope_contract,
+        allow_project_code=True,
         provision_environments=False,
         timeout_seconds=120,
     )
@@ -411,7 +463,7 @@ def main() -> int:
 
     evidence = {
         "schema_version": 1,
-        "benchmark": "historical-semantic-regressions-with-fixed-baseline-tests",
+        "benchmark": "historical-semantic-regressions-with-external-behavior-contracts",
         "cases": cases,
         "summary": {
             "cases_requested": len(cases),
@@ -436,9 +488,9 @@ def main() -> int:
     lines = [
         "# Historical Semantic Regression Benchmark",
         "",
-        "The test oracle is held fixed in both cases. A separate external probe "
-        "confirms the historical behavior regression after the original baseline "
-        "tests are executed.",
+        "The baseline test oracle is held fixed in both cases. The same external "
+        "behavior probe is frozen as an independent ModFactory contract and executed "
+        "against both baseline and candidate trees.",
         "",
         "| Repository | Baseline tests | External probe | ModFactory | Detected? |",
         "|---|---|---|---|---|",
@@ -459,14 +511,13 @@ def main() -> int:
         f"**Detected by ModFactory:** {detected}/{confirmed if confirmed else 0}",
         f"**Semantic detection signal:** {evidence['summary']['semantic_detection_signal']}",
         "",
-        "A PASSing baseline test suite plus a failing external regression probe means "
-        "the historical tests lacked coverage for the broken behavior. A ModFactory "
-        "REVIEW in that situation is a semantic miss, not a false PASS: the tool is "
-        "correctly refusing to claim deployment safety, but it has not discovered the "
-        "regression itself.",
+        "A PASSing baseline test suite plus a failing candidate behavior contract means "
+        "the repository's historical tests lacked coverage while an independent frozen "
+        "behavior contract supplied the missing acceptance evidence.",
         "",
-        "This benchmark intentionally does not add new detectors. Its purpose is to "
-        "falsify or support the current independent-verification wedge as implemented.",
+        "This benchmark adds no repository-specific detector. It tests whether a generic "
+        "external characterization contract converts known semantic misses into explicit "
+        "patch failures without allowing the patch to rewrite its own acceptance oracle.",
         "",
     ])
     (OUTPUT / "evidence.md").write_text("\n".join(lines), encoding="utf-8")

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from .behavior_contract import load_behavior_contract, run_behavior_contract
 from .model_bench import _git_apply, _verification_oracle_violations, inspect_unified_diff
 from .scanner import scan_repository
 from .verification import (
@@ -95,6 +96,7 @@ def verify_external_patch(
     *,
     targets: dict[str, str] | None = None,
     producer: str | None = None,
+    behavior_contract: str | Path | None = None,
     allow_project_code: bool = False,
     provision_environments: bool = False,
     timeout_seconds: int = 120,
@@ -134,6 +136,13 @@ def verify_external_patch(
         "target_contract_evidence": None,
         "project_checks": {"executed": False, "before": [], "after": []},
         "project_tests": {"executed": False, "before": [], "after": []},
+        "behavior_contract": {
+            "requested": behavior_contract is not None,
+            "evidence": None,
+            "executed": False,
+            "before": [],
+            "after": [],
+        },
         "environment_evidence": {
             "requested": provision_environments,
             "before": None,
@@ -157,6 +166,24 @@ def verify_external_patch(
     except ValueError as exc:
         return {**base, "reason": "baseline-identity-invalid", "detail": str(exc)}
     base["baseline_files"] = baseline_files
+
+    frozen_behavior_contract: dict[str, object] | None = None
+    if behavior_contract is not None:
+        try:
+            frozen_behavior_contract, behavior_evidence = load_behavior_contract(
+                behavior_contract,
+                repository_root=root,
+            )
+        except ValueError as exc:
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": "behavior-contract-invalid",
+                "detail": str(exc),
+            }
+        behavior_state = base["behavior_contract"]
+        assert isinstance(behavior_state, dict)
+        behavior_state["evidence"] = behavior_evidence
 
     with TemporaryDirectory(prefix="modfactory-external-before-") as before_td, TemporaryDirectory(prefix="modfactory-external-after-") as after_td:
         before_root = Path(before_td)
@@ -208,6 +235,58 @@ def verify_external_patch(
                 "verification_level": "static",
                 "oracle_violations": oracle_violations,
             }
+
+        if frozen_behavior_contract is not None:
+            if not allow_project_code:
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "behavior-contract-requires-project-execution",
+                    "verification_level": "behavior-contract",
+                }
+
+            before_behavior = run_behavior_contract(
+                before_root,
+                frozen_behavior_contract,
+                timeout_seconds=timeout_seconds,
+            )
+            behavior_state = base["behavior_contract"]
+            assert isinstance(behavior_state, dict)
+            behavior_state["executed"] = True
+            behavior_state["before"] = before_behavior
+
+            if not before_behavior or any(
+                item.get("status") != "PASS" for item in before_behavior
+            ):
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "baseline-behavior-contract-failed",
+                    "verification_level": "behavior-contract-before",
+                }
+
+            after_behavior = run_behavior_contract(
+                after_root,
+                frozen_behavior_contract,
+                timeout_seconds=timeout_seconds,
+            )
+            behavior_state["after"] = after_behavior
+
+            if len(after_behavior) != len(before_behavior):
+                return {
+                    **base,
+                    "status": "FAIL",
+                    "reason": "behavior-contract-result-cardinality-changed",
+                    "verification_level": "behavior-contract",
+                }
+
+            if any(item.get("status") != "PASS" for item in after_behavior):
+                return {
+                    **base,
+                    "status": "FAIL",
+                    "reason": "behavior-contract-regression",
+                    "verification_level": "behavior-contract",
+                }
 
         before_snapshot = scan_repository(before_root, targets=target_profile)
         after_snapshot = scan_repository(after_root, targets=target_profile)
@@ -383,6 +462,16 @@ def render_external_patch_markdown(result: dict[str, object]) -> str:
     for item in result.get("baseline_files", []):
         if isinstance(item, dict):
             lines.append(f"- {item.get('path')}: {item.get('sha256')}")
+
+    behavior = result.get("behavior_contract", {})
+    if isinstance(behavior, dict) and behavior.get("requested"):
+        evidence = behavior.get("evidence")
+        lines.extend(["", "## External behavior contract", ""])
+        if isinstance(evidence, dict):
+            lines.append(f"- Contract SHA-256: {evidence.get('contract_sha256')}")
+            lines.append(f"- File SHA-256: {evidence.get('sha256')}")
+            lines.append(f"- Cases: {evidence.get('case_ids', [])}")
+        lines.append(f"- Executed: {behavior.get('executed', False)}")
 
     lines.extend([
         "",
