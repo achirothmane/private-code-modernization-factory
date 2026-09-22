@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -133,6 +134,92 @@ class ExternalPatchVerificationTests(unittest.TestCase):
             self.assertTrue(result["project_tests"]["before"])
             self.assertEqual(result["project_tests"]["before"][0]["status"], "PASS")
             self.assertEqual(result["project_tests"]["after"][0]["status"], "FAIL")
+
+    def test_external_behavior_contract_catches_untested_regression(self):
+        with TemporaryDirectory() as td, TemporaryDirectory() as evidence_td:
+            root = Path(td)
+            evidence_root = Path(evidence_td)
+            _repo(root, test_asserts_value=False)
+            patch = evidence_root / "regression.patch"
+            _write_diff(root, patch, {"app.py": "VALUE = 2\n"})
+
+            probe = evidence_root / "probe.py"
+            probe.write_text(
+                "import os, sys\n"
+                "sys.path.insert(0, os.getcwd())\n"
+                "import app\n"
+                "assert app.VALUE == 1, app.VALUE\n",
+                encoding="utf-8",
+            )
+            contract = evidence_root / "behavior.json"
+            contract.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "commands": [{
+                        "id": "value-remains-one",
+                        "command": f"python {probe}",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            result = verify_external_patch(
+                root,
+                patch,
+                producer="external-tool",
+                behavior_contract=contract,
+                allow_project_code=True,
+                timeout_seconds=30,
+            )
+
+            self.assertEqual(result["status"], "FAIL", result)
+            self.assertEqual(result["reason"], "behavior-contract-regression")
+            self.assertEqual(result["verification_level"], "behavior-contract")
+            self.assertTrue(result["behavior_contract"]["executed"])
+            self.assertEqual(
+                result["behavior_contract"]["before"][0]["status"],
+                "PASS",
+            )
+            self.assertEqual(
+                result["behavior_contract"]["after"][0]["status"],
+                "FAIL",
+            )
+            self.assertEqual(
+                result["behavior_contract"]["evidence"]["case_ids"],
+                ["value-remains-one"],
+            )
+
+    def test_behavior_contract_must_be_external_to_repository(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _repo(root)
+            patch = root.parent / f"{root.name}-patch.diff"
+            _write_diff(root, patch, {"app.py": "# safe\nVALUE = 1\n"})
+            contract = root / "behavior.json"
+            contract.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "commands": [{
+                        "id": "noop",
+                        "command": "python -V",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            result = verify_external_patch(
+                root,
+                patch,
+                behavior_contract=contract,
+                allow_project_code=True,
+            )
+
+            self.assertEqual(result["status"], "BLOCKED", result)
+            self.assertEqual(result["reason"], "behavior-contract-invalid")
+            self.assertIn(
+                "behavior-contract-must-be-external-to-repository",
+                result["detail"],
+            )
 
     def test_external_patch_cannot_modify_the_test_oracle(self):
         with TemporaryDirectory() as td:
