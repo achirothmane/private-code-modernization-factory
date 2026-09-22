@@ -157,26 +157,50 @@ def _peewee_case(work: Path) -> dict[str, object]:
     _checkout(regressed, parent)
     _apply(regressed, patch)
 
-    # Run baseline tests unchanged. This avoids importing the regression test
-    # that was only added later when issue #2376 was fixed.
-    # The historical test package opportunistically imports PostgreSQL/Cockroach
-    # extensions. The current GitHub runner happens to provide a psycopg2 build
-    # whose JSON capability does not match this old Peewee revision, causing an
-    # unrelated import-time failure before the SQLite suites run. Hide psycopg2
-    # so the repository's own ImportError skip path is used; this does not
-    # alter the keys/regressions SQLite tests under measurement.
-    test_runner = (
-        "import runpy, sys; "
-        "import playhouse.postgres_ext as pg; "
-        "pg.Json = type('BenchmarkJson', (), {'__init__': lambda self, value=None, **kwargs: setattr(self, 'value', value)}); "
-        "sys.argv = ['runtests.py', 'keys', 'regressions']; "
-        "runpy.run_path('runtests.py', run_name='__main__')"
+    # Run the two baseline test modules directly while keeping their source
+    # bytes unchanged. Importing the historical tests package __init__ eagerly
+    # loads optional PostgreSQL/Cockroach suites whose modern runner-side driver
+    # state is incompatible with this old revision. A namespace loader avoids
+    # those unrelated optional imports without changing keys.py/regressions.py.
+    subset_runner = work / "peewee_subset_runner.py"
+    subset_runner.write_text(
+        """import importlib.util
+import pathlib
+import sys
+import types
+import unittest
+
+root = pathlib.Path(sys.argv[1]).resolve()
+pkg = types.ModuleType("tests")
+pkg.__path__ = [str(root / "tests")]
+pkg.__package__ = "tests"
+sys.modules["tests"] = pkg
+
+loaded = {}
+for name in ("base", "base_models", "keys", "regressions"):
+    path = root / "tests" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"tests.{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[f"tests.{name}"] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    loaded[name] = module
+
+suite = unittest.TestSuite()
+loader = unittest.TestLoader()
+suite.addTests(loader.loadTestsFromModule(loaded["keys"]))
+suite.addTests(loader.loadTestsFromModule(loaded["regressions"]))
+result = unittest.TextTestRunner(verbosity=1).run(suite)
+raise SystemExit(0 if result.wasSuccessful() else 1)
+""",
+        encoding="utf-8",
     )
     raw_tests = _run(
-        [sys.executable, "-c", test_runner],
+        [sys.executable, str(subset_runner), str(regressed)],
         regressed,
         timeout=600,
     )
+
 
     probe_code = r"""
 from peewee import CharField, ForeignKeyField, IntegerField, Model, SqliteDatabase
@@ -227,7 +251,7 @@ assert ids == ['0', '1', '2'], ids
         "patch_scope": ["peewee.py"],
         "construction": "exact production-file diff; baseline tests held fixed",
         "baseline_tests": {
-            "command": "python -c <runtests.py keys regressions with optional psycopg2 hidden>",
+            "command": "direct unittest load of unchanged tests/keys.py + tests/regressions.py",
             "result": raw_tests,
         },
         "external_regression_probe": {
