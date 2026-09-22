@@ -7,6 +7,7 @@ from modfactory.slices import build_migration_slices
 from modfactory.verification import (
     build_differential_verification,
     build_verification_contract,
+    provision_verification_environment,
     validate_verification_contract,
     write_verification,
 )
@@ -101,6 +102,28 @@ class VerificationContractTests(unittest.TestCase):
             valid, errors = validate_verification_contract(contract)
             self.assertTrue(valid, errors)
 
+    def test_isolated_contract_declares_python_venv_strategy(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+            (root / "tests").mkdir()
+            (root / "tests" / "test_app.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n    def test_x(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            snapshot = scan_repository(root)
+            contract = build_verification_contract(
+                root,
+                snapshot,
+                isolated_dependencies=True,
+            )
+
+            model = contract["environment_model"]
+            self.assertTrue(model["separate_dependency_environments"])
+            self.assertTrue(model["strategy"]["supported"])
+            self.assertEqual(model["strategy"]["steps"][0]["kind"], "python-venv")
+
     def test_contract_hash_detects_tampering(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -175,6 +198,47 @@ class DifferentialVerificationTests(unittest.TestCase):
                 [item["command"] for item in result["project_checks"]["before"]],
                 [item["command"] for item in result["project_checks"]["after"]],
             )
+
+    def test_opt_in_isolated_dependency_environments_are_distinct(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text(
+                "from collections import MutableMapping\n\nVALUE = 1\n",
+                encoding="utf-8",
+            )
+            (root / "requirements.txt").write_text("", encoding="utf-8")
+            _add_baseline(root)
+            snap, slice_id = _slice_id(root)
+
+            result = build_differential_verification(
+                root,
+                snap,
+                slice_id,
+                allow_project_code=True,
+                timeout_seconds=30,
+                provision_environments=True,
+            )
+
+            self.assertEqual(result["status"], "PASS", result)
+            self.assertEqual(
+                result["reason"],
+                "verification-contract-pass-isolated-dependencies",
+            )
+            self.assertEqual(
+                result["verification_level"],
+                "contract-isolated-dependencies",
+            )
+            self.assertFalse(result["deployment_admissible"])
+            before = result["environment_evidence"]["before"]
+            after = result["environment_evidence"]["after"]
+            self.assertEqual(before["status"], "PASS")
+            self.assertEqual(after["status"], "PASS")
+            self.assertNotEqual(
+                before["runtime"]["virtual_env"],
+                after["runtime"]["virtual_env"],
+            )
+            self.assertIn(".modfactory-env", before["runtime"]["virtual_env"])
+            self.assertIn(".modfactory-env", after["runtime"]["virtual_env"])
 
     def test_failing_before_baseline_blocks_attribution_to_patch(self):
         with TemporaryDirectory() as td:
