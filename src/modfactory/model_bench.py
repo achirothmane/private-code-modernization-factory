@@ -510,10 +510,16 @@ def inspect_unified_diff(diff: str) -> dict[str, object]:
 def _git_compatible_diff(diff: str) -> str:
     lines = diff.splitlines(keepends=True)
     output: list[str] = []
-    previous_nonempty = ""
+    has_explicit_diff_header = False
     index = 0
     while index < len(lines):
         line = lines[index]
+        if line.startswith("diff --git "):
+            has_explicit_diff_header = True
+            output.append(line)
+            index += 1
+            continue
+
         if line.startswith("--- ") and index + 1 < len(lines) and lines[index + 1].startswith("+++ "):
             old_path = _normalize_diff_path(line[4:].split("\t", 1)[0])
             new_path = _normalize_diff_path(lines[index + 1][4:].split("\t", 1)[0])
@@ -521,17 +527,16 @@ def _git_compatible_diff(diff: str) -> str:
                 old_path is not None
                 and new_path is not None
                 and old_path == new_path
-                and not previous_nonempty.startswith("diff --git ")
+                and not has_explicit_diff_header
             ):
                 output.append(f"diff --git a/{old_path} b/{new_path}\n")
             output.append(line)
             output.append(lines[index + 1])
-            previous_nonempty = lines[index + 1].strip()
+            has_explicit_diff_header = False
             index += 2
             continue
+
         output.append(line)
-        if line.strip():
-            previous_nonempty = line.strip()
         index += 1
     return "".join(output)
 
