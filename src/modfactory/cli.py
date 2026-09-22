@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .benchmark import benchmark_corpus, write_benchmark
+from .external_patch import verify_external_patch, write_external_patch_verification
 from .patches import DEFAULT_DIFF_BUDGET, build_patch_proposal, write_patch_proposal
 from .model_eval import build_model_evaluation_plan, write_model_evaluation_plan
 from .model_bench import (
@@ -58,6 +59,21 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Provision separate baseline/target dependency environments before executing the contract")
     verify.add_argument("--timeout", type=int, default=120,
                         help="Per-command timeout in seconds when project-code execution is enabled")
+
+    verify_patch = sub.add_parser(
+        "verify-patch",
+        help="Independently verify an external unified-diff patch artifact",
+    )
+    verify_patch.add_argument("repository", help="Path to baseline repository")
+    verify_patch.add_argument("--patch", required=True, help="Path to immutable unified-diff patch artifact")
+    verify_patch.add_argument("--producer", help="Optional producer metadata such as codex, copilot, claude, or openrewrite")
+    verify_patch.add_argument("--output", default=".modfactory", help="Output directory")
+    verify_patch.add_argument("--allow-project-code", action="store_true",
+                              help="Explicitly allow frozen project commands to run in temporary copies")
+    verify_patch.add_argument("--provision-environments", action="store_true",
+                              help="Provision separate baseline/target dependency environments before verification")
+    verify_patch.add_argument("--timeout", type=int, default=120,
+                              help="Per-command/provisioning timeout in seconds")
 
     bench = sub.add_parser("benchmark", help="Measure deterministic coverage and escalation pressure across a local corpus")
     bench.add_argument("corpus", help="Directory containing repository subdirectories")
@@ -113,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--bearer-token-env",
         help="Optional environment variable containing a bearer token; omitted for local endpoints",
     )
-    for command_parser in (analyze, propose, verify, bench, eval_plan):
+    for command_parser in (analyze, propose, verify, verify_patch, bench, eval_plan):
         command_parser.add_argument(
             "--target",
             action="append",
@@ -198,6 +214,42 @@ def main(argv: list[str] | None = None) -> int:
         if result["status"] == "REVIEW":
             return 4
         return 5
+
+    if args.command == "verify-patch":
+        if args.timeout < 1:
+            print("--timeout must be >= 1", file=sys.stderr)
+            return 2
+        if args.provision_environments and not args.allow_project_code:
+            print("--provision-environments requires --allow-project-code", file=sys.stderr)
+            return 2
+        try:
+            result = verify_external_patch(
+                args.repository,
+                args.patch,
+                targets=target_profile,
+                producer=args.producer,
+                allow_project_code=args.allow_project_code,
+                provision_environments=args.provision_environments,
+                timeout_seconds=args.timeout,
+            )
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        json_path, md_path = write_external_patch_verification(result, args.output)
+        artifact = result.get("patch_artifact", {})
+        print(f"Verification: {result['status']}")
+        print(f"Reason: {result['reason']}")
+        print(f"Level: {result['verification_level']}")
+        print(f"Patch SHA-256: {artifact.get('sha256') if isinstance(artifact, dict) else None}")
+        print(f"JSON: {json_path}")
+        print(f"Markdown: {md_path}")
+        if result["status"] == "PASS":
+            return 0
+        if result["status"] == "REVIEW":
+            return 4
+        if result["status"] == "BLOCKED":
+            return 5
+        return 7
 
     if args.command == "eval-plan":
         if args.diff_budget < 1:
