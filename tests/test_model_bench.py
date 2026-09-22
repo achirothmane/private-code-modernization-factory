@@ -253,13 +253,16 @@ class ModelBenchmarkTests(unittest.TestCase):
                 ))
             response = self._response(request, "".join(chunks))
 
-            fake_pass = {
+            fake_pass = [{
+                "kind": "test",
+                "source": "package.json#scripts.test",
+                "working_directory": ".",
                 "command": "npm test",
                 "status": "PASS",
                 "returncode": 0,
                 "duration_seconds": 0.01,
-            }
-            with patch("modfactory.model_bench._run_command", return_value=fake_pass):
+            }]
+            with patch("modfactory.model_bench.run_verification_contract", return_value=fake_pass):
                 score = score_model_response(
                     root,
                     request,
@@ -296,13 +299,16 @@ class ModelBenchmarkTests(unittest.TestCase):
             first_test_header = diff.find("--- a/test/a.test.js")
             response = self._response(request, package_diff + diff[first_test_header:])
 
-            fake_pass = {
+            fake_pass = [{
+                "kind": "test",
+                "source": "package.json#scripts.test",
+                "working_directory": ".",
                 "command": "npm test",
                 "status": "PASS",
                 "returncode": 0,
                 "duration_seconds": 0.01,
-            }
-            with patch("modfactory.model_bench._run_command", return_value=fake_pass):
+            }]
+            with patch("modfactory.model_bench.run_verification_contract", return_value=fake_pass):
                 score = score_model_response(
                     root,
                     request,

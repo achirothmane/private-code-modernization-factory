@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -142,6 +144,171 @@ def _run_command(command: str, cwd: Path, timeout_seconds: int) -> dict[str, obj
     }
 
 
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _runtime_fingerprint() -> dict[str, str]:
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "executable_name": Path(sys.executable).name,
+        "platform_system": platform.system(),
+        "platform_release": platform.release(),
+        "machine": platform.machine(),
+    }
+
+
+def _dependency_inputs(root: Path, snapshot: RepoSnapshot) -> list[dict[str, str]]:
+    candidates = set(str(item) for item in snapshot.manifests)
+    for name in (
+        "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock",
+        "poetry.lock", "Pipfile.lock", "uv.lock", "requirements.txt",
+        "go.sum", "Cargo.lock", "gradle.lockfile",
+    ):
+        if (root / name).is_file():
+            candidates.add(name)
+
+    result: list[dict[str, str]] = []
+    for rel in sorted(candidates):
+        path = (root / rel).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            digest = _sha256_file(path)
+        except OSError:
+            continue
+        result.append({"path": rel, "sha256": digest})
+    return result
+
+
+def build_verification_contract(
+    root: str | Path,
+    snapshot: RepoSnapshot,
+    *,
+    command_limit: int = 12,
+) -> dict[str, object]:
+    root_path = Path(root).resolve()
+    commands = []
+    for item in discover_commands(root_path, snapshot)[:command_limit]:
+        commands.append({
+            "kind": str(item.get("kind", "")),
+            "command": str(item.get("command", "")),
+            "source": str(item.get("source", "")),
+            "confidence": str(item.get("confidence", "")),
+            "working_directory": ".",
+        })
+
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "target_profile": dict(snapshot.target_profile),
+        "commands": commands,
+        "dependency_inputs": _dependency_inputs(root_path, snapshot),
+        "runtime_fingerprint": _runtime_fingerprint(),
+        "environment_model": {
+            "baseline_target_isolation": "shared-host",
+            "dependency_provisioning": "external",
+            "separate_dependency_environments": False,
+            "deployment_evidence": False,
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return {
+        **payload,
+        "contract_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def validate_verification_contract(contract: dict[str, object]) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    digest = contract.get("contract_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        errors.append("contract-sha256-missing")
+        return False, errors
+
+    payload = {key: value for key, value in contract.items() if key != "contract_sha256"}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if actual != digest:
+        errors.append("contract-sha256-mismatch")
+
+    commands = contract.get("commands")
+    if not isinstance(commands, list):
+        errors.append("contract-commands-invalid")
+    return not errors, errors
+
+
+def run_verification_contract(
+    root: str | Path,
+    contract: dict[str, object],
+    *,
+    timeout_seconds: int,
+) -> list[dict[str, object]]:
+    valid, errors = validate_verification_contract(contract)
+    if not valid:
+        return [{
+            "kind": "contract",
+            "command": "",
+            "source": "",
+            "working_directory": ".",
+            "status": "BLOCKED",
+            "reason": ",".join(errors),
+            "returncode": None,
+            "duration_seconds": 0.0,
+        }]
+
+    root_path = Path(root).resolve()
+    results: list[dict[str, object]] = []
+    commands = contract.get("commands", [])
+    assert isinstance(commands, list)
+
+    for item in commands:
+        if not isinstance(item, dict):
+            continue
+        rel_cwd = str(item.get("working_directory", "."))
+        cwd = (root_path / rel_cwd).resolve()
+        try:
+            cwd.relative_to(root_path)
+        except ValueError:
+            result = {
+                "command": str(item.get("command", "")),
+                "status": "BLOCKED",
+                "reason": "working-directory-escapes-root",
+                "returncode": None,
+                "duration_seconds": 0.0,
+            }
+        else:
+            if not cwd.is_dir():
+                result = {
+                    "command": str(item.get("command", "")),
+                    "status": "BLOCKED",
+                    "reason": "working-directory-missing",
+                    "returncode": None,
+                    "duration_seconds": 0.0,
+                }
+            else:
+                result = _run_command(
+                    str(item.get("command", "")),
+                    cwd,
+                    timeout_seconds,
+                )
+        results.append({
+            "kind": str(item.get("kind", "")),
+            "source": str(item.get("source", "")),
+            "working_directory": rel_cwd,
+            **result,
+        })
+    return results
+
+
+def _test_results(checks: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [item for item in checks if item.get("kind") == "test"]
+
+
 def _run_test_commands(
     root: Path,
     snapshot: RepoSnapshot,
@@ -188,6 +355,12 @@ def build_differential_verification(
             "before": [],
             "after": [],
         },
+        "project_checks": {
+            "executed": False,
+            "before": [],
+            "after": [],
+        },
+        "verification_contract": None,
         "deployment_admissible": False,
         "requires_human_review": True,
     }
@@ -286,64 +459,84 @@ def build_differential_verification(
                 "deployment_admissible": False,
             }
 
-        before_tests = _run_test_commands(
-            before_root,
-            before_snapshot,
-            timeout_seconds=timeout_seconds,
-        )
-        after_tests = _run_test_commands(
-            after_root,
-            after_snapshot,
-            timeout_seconds=timeout_seconds,
-        )
-        project_tests = {
-            "executed": True,
-            "before": before_tests,
-            "after": after_tests,
-        }
-        result["project_tests"] = project_tests
-
-        if not before_tests:
+        contract = build_verification_contract(before_root, before_snapshot)
+        result["verification_contract"] = contract
+        contract_commands = contract.get("commands", [])
+        test_commands = [
+            item for item in contract_commands
+            if isinstance(item, dict) and item.get("kind") == "test"
+        ] if isinstance(contract_commands, list) else []
+        if not test_commands:
             return {
                 **result,
                 "status": "BLOCKED",
-                "reason": "no-test-command-executed",
+                "reason": "no-test-command-in-verification-contract",
                 "verification_level": "static",
             }
 
-        if any(item.get("status") != "PASS" for item in before_tests):
+        before_checks = run_verification_contract(
+            before_root,
+            contract,
+            timeout_seconds=timeout_seconds,
+        )
+        after_checks: list[dict[str, object]] = []
+        project_checks = {
+            "executed": True,
+            "before": before_checks,
+            "after": after_checks,
+        }
+        result["project_checks"] = project_checks
+        result["project_tests"] = {
+            "executed": True,
+            "before": _test_results(before_checks),
+            "after": [],
+        }
+
+        if not before_checks or any(item.get("status") != "PASS" for item in before_checks):
             return {
                 **result,
                 "status": "BLOCKED",
-                "reason": "baseline-failed-before",
-                "verification_level": "tests-before",
+                "reason": "baseline-verification-contract-failed",
+                "verification_level": "contract-before",
             }
 
-        if len(after_tests) != len(before_tests):
+        # Reuse the exact baseline contract after the patch. Command discovery,
+        # command sources, working directories, and runtime identity are frozen.
+        after_checks = run_verification_contract(
+            after_root,
+            contract,
+            timeout_seconds=timeout_seconds,
+        )
+        project_checks["after"] = after_checks
+        result["project_tests"]["after"] = _test_results(after_checks)
+
+        if len(after_checks) != len(before_checks):
             return {
                 **result,
                 "status": "FAIL",
-                "reason": "test-command-set-changed",
-                "verification_level": "tests",
+                "reason": "verification-contract-result-cardinality-changed",
+                "verification_level": "contract",
             }
 
-        if any(item.get("status") != "PASS" for item in after_tests):
+        if any(item.get("status") != "PASS" for item in after_checks):
             return {
                 **result,
                 "status": "FAIL",
                 "reason": "regression-after-patch",
-                "verification_level": "tests",
+                "verification_level": "contract",
             }
 
         performance = []
-        for before_item, after_item in zip(before_tests, after_tests):
+        for before_item, after_item in zip(before_checks, after_checks):
             before_seconds = float(before_item.get("duration_seconds", 0.0))
             after_seconds = float(after_item.get("duration_seconds", 0.0))
             ratio = None
             if before_seconds > 0:
                 ratio = round(after_seconds / before_seconds, 3)
             performance.append({
+                "kind": before_item.get("kind"),
                 "command": before_item.get("command"),
+                "working_directory": before_item.get("working_directory"),
                 "before_seconds": before_seconds,
                 "after_seconds": after_seconds,
                 "ratio": ratio,
@@ -353,16 +546,21 @@ def build_differential_verification(
         return {
             **result,
             "status": "PASS",
-            "reason": "static-and-project-tests-pass",
-            "verification_level": "tests",
+            "reason": "verification-contract-pass-shared-host",
+            "verification_level": "contract-shared-host",
             "performance_observation": performance,
-            "deployment_admissible": True,
+            # Passing a pinned command contract on two temporary copies is useful
+            # regression evidence, but it is not yet deployment evidence because
+            # dependencies are not provisioned into isolated baseline/target envs.
+            "deployment_admissible": False,
         }
 
 
 def render_verification_markdown(result: dict[str, object]) -> str:
     static = result.get("static_checks", {})
     project = result.get("project_tests", {})
+    checks = result.get("project_checks", {})
+    contract = result.get("verification_contract")
     lines = [
         "# Differential Verification Report",
         "",
@@ -387,6 +585,31 @@ def render_verification_markdown(result: dict[str, object]) -> str:
         ])
     else:
         lines.extend(["Static verification did not run.", ""])
+
+    lines.extend(["## Verification contract", ""])
+    if isinstance(contract, dict):
+        environment_model = contract.get("environment_model", {})
+        lines.extend([
+            f"- Contract SHA-256: {contract.get('contract_sha256')}",
+            f"- Commands: {len(contract.get('commands', [])) if isinstance(contract.get('commands'), list) else 0}",
+            f"- Environment model: {environment_model}",
+            "",
+        ])
+    else:
+        lines.extend(["No execution contract was built.", ""])
+
+    lines.extend(["## Project check evidence", ""])
+    if isinstance(checks, dict) and checks.get("executed"):
+        for phase in ("before", "after"):
+            lines.append(f"### {phase.title()}")
+            for item in checks.get(phase, []):
+                lines.append(
+                    f"- [{item.get('kind')}] {item.get('command')} -> {item.get('status')} "
+                    f"({item.get('duration_seconds')}s)"
+                )
+            lines.append("")
+    else:
+        lines.extend(["Project checks were not executed.", ""])
 
     lines.extend(["## Project test evidence", ""])
     if isinstance(project, dict) and project.get("executed"):

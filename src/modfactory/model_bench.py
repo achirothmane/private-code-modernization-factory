@@ -12,10 +12,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable, Protocol
 
-from .commands import discover_commands
 from .model_eval import _npm_usage_sites
 from .scanner import scan_repository
-from .verification import _copy_repository, _finding_key, _run_command
+from .verification import (
+    _copy_repository,
+    _finding_key,
+    build_verification_contract,
+    run_verification_contract,
+)
 
 
 RESPONSE_SCHEMA_VERSION = 1
@@ -604,14 +608,6 @@ def _package_scripts(root: Path) -> dict[str, object] | None:
     return scripts if isinstance(scripts, dict) else {}
 
 
-def _test_command_contract(root: Path, snapshot: object, limit: int = 3) -> list[tuple[str, str]]:
-    return [
-        (str(item.get("command", "")), str(item.get("source", "")))
-        for item in discover_commands(root, snapshot)
-        if item.get("kind") == "test"
-    ][:limit]
-
-
 def _verification_oracle_violations(
     before_root: Path,
     after_root: Path,
@@ -712,6 +708,9 @@ def score_model_response(
         "reason": "response-envelope-invalid",
         "gates": {},
         "project_tests": {"executed": False, "before": [], "after": []},
+        "project_checks": {"executed": False, "before": [], "after": []},
+        "verification_contract": None,
+        "deployment_admissible": False,
     }
     if not request_valid:
         return {
@@ -841,31 +840,64 @@ def score_model_response(
 
         before_snapshot = scan_repository(before_root, targets=target_profile)
         after_snapshot = scan_repository(after_root, targets=target_profile)
-        before_contract = _test_command_contract(before_root, before_snapshot)
-        after_contract = _test_command_contract(after_root, after_snapshot)
-        gates["test_command_contract_unchanged"] = before_contract == after_contract
+        before_contract = build_verification_contract(before_root, before_snapshot)
+        after_contract = build_verification_contract(after_root, after_snapshot)
+        base["verification_contract"] = before_contract
 
-        baseline_commands = [command for command, _source in before_contract]
-        before_tests = [
-            _run_command(command, before_root, timeout_seconds)
-            for command in baseline_commands
-        ]
-        project_tests = {
+        def command_signature(contract: dict[str, object]) -> list[tuple[str, str, str, str]]:
+            raw = contract.get("commands", [])
+            if not isinstance(raw, list):
+                return []
+            return [
+                (
+                    str(item.get("kind", "")),
+                    str(item.get("command", "")),
+                    str(item.get("source", "")),
+                    str(item.get("working_directory", ".")),
+                )
+                for item in raw
+                if isinstance(item, dict)
+            ]
+
+        before_command_contract = command_signature(before_contract)
+        after_command_contract = command_signature(after_contract)
+        gates["verification_command_contract_unchanged"] = (
+            before_command_contract == after_command_contract
+        )
+
+        before_checks = run_verification_contract(
+            before_root,
+            before_contract,
+            timeout_seconds=timeout_seconds,
+        )
+        base["project_checks"] = {
+            "executed": True,
+            "before": before_checks,
+            "after": [],
+        }
+        before_tests = [item for item in before_checks if item.get("kind") == "test"]
+        base["project_tests"] = {
             "executed": True,
             "before": before_tests,
             "after": [],
         }
-        base["project_tests"] = project_tests
-        gates["baseline_tests_pass"] = bool(before_tests) and all(
-            item.get("status") == "PASS" for item in before_tests
+        gates["baseline_contract_pass"] = bool(before_checks) and all(
+            item.get("status") == "PASS" for item in before_checks
         )
 
-        if not gates["baseline_tests_pass"]:
+        if not before_tests:
             return {
                 **base,
                 "status": "BLOCKED",
-                "reason": "baseline-failed-before",
-                "verification_level": "tests-before",
+                "reason": "no-test-command-in-verification-contract",
+                "verification_level": "contract-before",
+            }
+        if not gates["baseline_contract_pass"]:
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": "baseline-verification-contract-failed",
+                "verification_level": "contract-before",
             }
 
         oracle_violations = _verification_oracle_violations(
@@ -874,46 +906,50 @@ def score_model_response(
             changed,
         )
         gates["verification_oracle_unchanged"] = (
-            not oracle_violations and bool(gates["test_command_contract_unchanged"])
+            not oracle_violations
+            and bool(gates["verification_command_contract_unchanged"])
         )
         if not gates["verification_oracle_unchanged"]:
             return {
                 **base,
                 "status": "BLOCKED",
                 "reason": "verification-oracle-modified",
-                "verification_level": "tests-before",
+                "verification_level": "contract-before",
                 "oracle_violations": oracle_violations,
-                "test_command_contract_before": before_contract,
-                "test_command_contract_after": after_contract,
+                "verification_command_contract_before": before_command_contract,
+                "verification_command_contract_after": after_command_contract,
             }
 
-        # Execute exactly the baseline-discovered commands after the patch. Never
-        # rediscover a weaker command set from the patched repository and then
-        # use that weaker set as evidence for PASS.
-        after_tests = [
-            _run_command(command, after_root, timeout_seconds)
-            for command in baseline_commands
-        ]
-        project_tests["after"] = after_tests
-        gates["patched_tests_pass"] = (
-            len(after_tests) == len(before_tests)
-            and bool(after_tests)
-            and all(item.get("status") == "PASS" for item in after_tests)
+        # Execute the exact baseline contract after the patch; never rediscover
+        # a weaker command set from the patched repository.
+        after_checks = run_verification_contract(
+            after_root,
+            before_contract,
+            timeout_seconds=timeout_seconds,
+        )
+        base["project_checks"]["after"] = after_checks
+        after_tests = [item for item in after_checks if item.get("kind") == "test"]
+        base["project_tests"]["after"] = after_tests
+        gates["patched_contract_pass"] = (
+            len(after_checks) == len(before_checks)
+            and bool(after_checks)
+            and all(item.get("status") == "PASS" for item in after_checks)
         )
 
-        if not gates["patched_tests_pass"]:
+        if not gates["patched_contract_pass"]:
             return {
                 **base,
                 "status": "FAIL",
                 "reason": "regression-after-model-patch",
-                "verification_level": "tests",
+                "verification_level": "contract",
             }
 
         return {
             **base,
             "status": "PASS",
-            "reason": "static-and-project-tests-pass",
-            "verification_level": "tests",
+            "reason": "verification-contract-pass-shared-host",
+            "verification_level": "contract-shared-host",
+            "deployment_admissible": False,
         }
 
 
