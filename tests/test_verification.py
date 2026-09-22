@@ -4,7 +4,12 @@ import unittest
 
 from modfactory.scanner import scan_repository
 from modfactory.slices import build_migration_slices
-from modfactory.verification import build_differential_verification, write_verification
+from modfactory.verification import (
+    build_differential_verification,
+    build_verification_contract,
+    validate_verification_contract,
+    write_verification,
+)
 
 
 def _add_baseline(
@@ -55,6 +60,67 @@ class DifferentialFindingIdentityTests(unittest.TestCase):
         self.assertNotEqual(_finding_key(medium), _finding_key(escalated))
 
 
+class VerificationContractTests(unittest.TestCase):
+    def test_contract_freezes_test_build_and_typecheck_commands(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+            (root / "test").mkdir()
+            (root / "test" / "index.test.js").write_text("module.exports = true\n", encoding="utf-8")
+            (root / "package.json").write_text(
+                '{"scripts":{"test":"node test/index.test.js","build":"node -c src/index.js","typecheck":"node -c src/index.js"},"dependencies":{}}\n',
+                encoding="utf-8",
+            )
+            (root / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / ".github" / "workflows" / "ci.yml").write_text(
+                "name: ci\njobs:\n  test:\n    steps:\n"
+                "      - run: npm test\n"
+                "      - run: npm run build\n"
+                "      - run: npm run typecheck\n",
+                encoding="utf-8",
+            )
+
+            snapshot = scan_repository(root)
+            contract = build_verification_contract(root, snapshot)
+
+            kinds = {item["kind"] for item in contract["commands"]}
+            commands = {item["command"] for item in contract["commands"]}
+            self.assertIn("test", kinds)
+            self.assertIn("build", kinds)
+            self.assertIn("lint", kinds)
+            self.assertIn("npm test", commands)
+            self.assertIn("npm run build", commands)
+            self.assertIn("npm run typecheck", commands)
+            self.assertEqual(contract["environment_model"]["baseline_target_isolation"], "shared-host")
+            self.assertFalse(contract["environment_model"]["deployment_evidence"])
+            dependency_paths = {item["path"] for item in contract["dependency_inputs"]}
+            self.assertIn("package.json", dependency_paths)
+            self.assertIn("package-lock.json", dependency_paths)
+            valid, errors = validate_verification_contract(contract)
+            self.assertTrue(valid, errors)
+
+    def test_contract_hash_detects_tampering(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (root / "tests").mkdir()
+            (root / "tests" / "test_app.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n    def test_x(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            snapshot = scan_repository(root)
+            contract = build_verification_contract(root, snapshot)
+            self.assertTrue(contract["commands"])
+            contract["commands"][0]["command"] = "python -c pass"
+
+            valid, errors = validate_verification_contract(contract)
+
+            self.assertFalse(valid)
+            self.assertIn("contract-sha256-mismatch", errors)
+
+
 class DifferentialVerificationTests(unittest.TestCase):
     def test_static_verification_removes_target_finding_without_touching_original(self):
         with TemporaryDirectory() as td, TemporaryDirectory() as out:
@@ -98,9 +164,17 @@ class DifferentialVerificationTests(unittest.TestCase):
             )
 
             self.assertEqual(result["status"], "PASS", result)
-            self.assertEqual(result["verification_level"], "tests")
+            self.assertEqual(result["verification_level"], "contract-shared-host")
+            self.assertEqual(result["reason"], "verification-contract-pass-shared-host")
             self.assertTrue(result["project_tests"]["executed"])
-            self.assertTrue(result["deployment_admissible"])
+            self.assertTrue(result["project_checks"]["executed"])
+            self.assertFalse(result["deployment_admissible"])
+            contract = result["verification_contract"]
+            self.assertEqual(len(contract["contract_sha256"]), 64)
+            self.assertEqual(
+                [item["command"] for item in result["project_checks"]["before"]],
+                [item["command"] for item in result["project_checks"]["after"]],
+            )
 
     def test_failing_before_baseline_blocks_attribution_to_patch(self):
         with TemporaryDirectory() as td:
@@ -125,7 +199,7 @@ class DifferentialVerificationTests(unittest.TestCase):
             )
 
             self.assertEqual(result["status"], "BLOCKED", result)
-            self.assertEqual(result["reason"], "baseline-failed-before")
+            self.assertEqual(result["reason"], "baseline-verification-contract-failed")
 
     def test_shell_metacharacter_test_command_is_blocked(self):
         with TemporaryDirectory() as td:
@@ -156,7 +230,7 @@ class DifferentialVerificationTests(unittest.TestCase):
             )
 
             self.assertEqual(result["status"], "BLOCKED", result)
-            self.assertEqual(result["reason"], "baseline-failed-before")
+            self.assertEqual(result["reason"], "baseline-verification-contract-failed")
             self.assertEqual(result["project_tests"]["before"][0]["status"], "BLOCKED")
 
 
