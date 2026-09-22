@@ -70,50 +70,75 @@ def _transform_distutils(text: str) -> tuple[str, str | None]:
     return updated, None
 
 
+def _ast_offset(text: str, lineno: int, col_offset: int) -> int:
+    """Translate AST UTF-8 byte offsets into Python string offsets."""
+    lines = text.splitlines(keepends=True)
+    if lineno < 1 or lineno > len(lines):
+        raise ValueError("AST position is outside source text")
+    line = lines[lineno - 1]
+    prefix_bytes = line.encode("utf-8")[:col_offset]
+    prefix = prefix_bytes.decode("utf-8", errors="strict")
+    return sum(len(item) for item in lines[:lineno - 1]) + len(prefix)
+
+
 def _transform_collections_abc(text: str) -> tuple[str, str | None]:
-    changed = False
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return text, f"Python source cannot be parsed safely: {exc}"
+
+    replacements: list[tuple[int, int, str]] = []
     blocked_mixed_import = False
-    line_pattern = re.compile(
-        r"(?m)^(?P<indent>\s*)from\s+collections\s+import\s+(?P<names>[^\n#]+)(?P<suffix>\s*(?:#.*)?)$"
-    )
+    lines = text.splitlines(keepends=True)
 
-    def replace_import(match: re.Match[str]) -> str:
-        nonlocal changed, blocked_mixed_import
-        raw_names = match.group("names").strip()
-        if "(" in raw_names or ")" in raw_names:
-            blocked_mixed_import = True
-            return match.group(0)
-
-        names = [item.strip() for item in raw_names.split(",") if item.strip()]
-        base_names = {item.split()[0] for item in names}
-        if not names or not base_names.issubset(COLLECTION_ABCS):
-            if base_names & COLLECTION_ABCS:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "collections":
+            names = [alias.name for alias in node.names]
+            selected = set(names) & COLLECTION_ABCS
+            if not selected:
+                continue
+            if (
+                set(names) != selected
+                or getattr(node, "end_lineno", node.lineno) != node.lineno
+            ):
                 blocked_mixed_import = True
-            return match.group(0)
+                continue
 
-        changed = True
-        return (
-            f"{match.group('indent')}from collections.abc import "
-            f"{match.group('names').rstrip()}{match.group('suffix')}"
-        )
+            line_start = _ast_offset(text, node.lineno, 0)
+            line_text = lines[node.lineno - 1]
+            match = re.search(r"\bfrom\s+collections\s+import\b", line_text)
+            if not match:
+                return text, "Unable to locate the collections import token safely."
+            module_start = line_start + match.start() + match.group(0).find("collections")
+            module_end = module_start + len("collections")
+            replacements.append((module_start, module_end, "collections.abc"))
 
-    updated = line_pattern.sub(replace_import, text)
-
-    direct_pattern = re.compile(
-        r"\bcollections\.(Mapping|MutableMapping|Sequence|MutableSequence)\b"
-    )
-    updated, direct_count = direct_pattern.subn(r"collections.abc.\1", updated)
-    if direct_count:
-        changed = True
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "collections"
+            and node.attr in COLLECTION_ABCS
+            and hasattr(node, "end_lineno")
+            and hasattr(node, "end_col_offset")
+        ):
+            start = _ast_offset(text, node.lineno, node.col_offset)
+            end = _ast_offset(text, node.end_lineno, node.end_col_offset)
+            replacements.append((start, end, f"collections.abc.{node.attr}"))
 
     if blocked_mixed_import:
         return text, (
-            "Mixed or parenthesized 'from collections import ...' statements are blocked "
+            "Mixed or multiline 'from collections import ...' statements are blocked "
             "because moving only selected names could change import semantics."
         )
-    if not changed:
+
+    if not replacements:
         return text, "No deterministic collections ABC replacement was found."
+
+    updated = text
+    for start, end, replacement in sorted(set(replacements), reverse=True):
+        updated = updated[:start] + replacement + updated[end:]
     return updated, None
+
 
 
 
@@ -242,11 +267,22 @@ def _transform_reactdom_render(text: str, target: str) -> tuple[str, str | None]
         return text, "ReactDOM.render arguments are not a supported two-argument shape."
     element_expr, container_expr = args
 
-    updated = import_pattern.sub(
-        lambda m: f"{m.group('indent')}import {{ createRoot }} from 'react-dom/client'",
-        text,
-        count=1,
+    # Preserve the default ReactDOM binding until after the render rewrite.
+    # Other APIs such as ReactDOM.createPortal remain valid in React 18 and
+    # must not lose their import merely because ReactDOM.render is replaced.
+    client_import_pattern = re.compile(
+        r"(?m)^\s*import\s*\{[^}]*\bcreateRoot\b[^}]*\}\s*from\s*['\"]react-dom/client['\"]\s*;?\s*$"
     )
+    updated = text
+    if not client_import_pattern.search(updated):
+        newline = "\r\n" if "\r\n" in updated else "\n"
+        insert_at = import_match.end()
+        updated = (
+            updated[:insert_at]
+            + newline
+            + f"{import_match.group('indent')}import {{ createRoot }} from 'react-dom/client'"
+            + updated[insert_at:]
+        )
 
     call_start = updated.find(call_token)
     open_index = call_start + len("ReactDOM.render")
@@ -278,6 +314,14 @@ def _transform_reactdom_render(text: str, target: str) -> tuple[str, str | None]
     updated = updated[:call_start] + replacement + updated[close_index + 1:]
     if "ReactDOM.render(" in updated:
         return text, "Legacy ReactDOM.render remains after deterministic transform."
+
+    # Remove the default import only if no ReactDOM reference remains after the
+    # render rewrite. This keeps createPortal/findDOMNode/etc. bound correctly.
+    without_import = import_pattern.sub("", updated, count=1)
+    if not re.search(r"\bReactDOM\b", without_import):
+        updated = import_pattern.sub("", updated, count=1)
+        updated = re.sub(r"^(?:\r?\n)+", "", updated, count=1)
+
     return updated, None
 
 
