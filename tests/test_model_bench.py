@@ -11,6 +11,7 @@ from modfactory.model_bench import (
     OpenAICompatibleAdapter,
     _git_apply,
     _git_compatible_diff,
+    _looks_like_test_oracle_path,
     build_model_request,
     inspect_unified_diff,
     run_model_request,
@@ -110,6 +111,17 @@ class ModelBenchmarkTests(unittest.TestCase):
                 "cost_usd": 0.0123,
             },
         }
+
+    def test_snapshot_and_golden_artifacts_are_test_oracles(self):
+        self.assertTrue(
+            _looks_like_test_oracle_path(
+                "packages/exporter/__snapshots__/instrument-snapshot.test.ts.js"
+            )
+        )
+        self.assertTrue(_looks_like_test_oracle_path("tests/output.snap"))
+        self.assertTrue(_looks_like_test_oracle_path("golden/render.txt"))
+        self.assertTrue(_looks_like_test_oracle_path("spec/foo.approved.json"))
+        self.assertFalse(_looks_like_test_oracle_path("src/snapshot_manager.py"))
 
     def test_standard_git_diff_header_is_not_duplicated(self):
         diff = (
