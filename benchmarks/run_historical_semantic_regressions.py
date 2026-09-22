@@ -159,8 +159,20 @@ def _peewee_case(work: Path) -> dict[str, object]:
 
     # Run baseline tests unchanged. This avoids importing the regression test
     # that was only added later when issue #2376 was fixed.
+    # The historical test package opportunistically imports PostgreSQL/Cockroach
+    # extensions. The current GitHub runner happens to provide a psycopg2 build
+    # whose JSON capability does not match this old Peewee revision, causing an
+    # unrelated import-time failure before the SQLite suites run. Hide psycopg2
+    # so the repository's own ImportError skip path is used; this does not
+    # alter the keys/regressions SQLite tests under measurement.
+    test_runner = (
+        "import runpy, sys; "
+        "sys.modules['psycopg2'] = None; "
+        "sys.argv = ['runtests.py', 'keys', 'regressions']; "
+        "runpy.run_path('runtests.py', run_name='__main__')"
+    )
     raw_tests = _run(
-        [sys.executable, "runtests.py", "keys", "regressions"],
+        [sys.executable, "-c", test_runner],
         regressed,
         timeout=600,
     )
@@ -214,7 +226,7 @@ assert ids == ['0', '1', '2'], ids
         "patch_scope": ["peewee.py"],
         "construction": "exact production-file diff; baseline tests held fixed",
         "baseline_tests": {
-            "command": "python runtests.py keys regressions",
+            "command": "python -c <runtests.py keys regressions with optional psycopg2 hidden>",
             "result": raw_tests,
         },
         "external_regression_probe": {
