@@ -578,7 +578,10 @@ def _legacy_usage_remaining(root: Path, task: dict[str, object]) -> list[str]:
     return [path.relative_to(root).as_posix() for path in _npm_usage_sites(root, package)]
 
 
-TEST_ORACLE_DIR_NAMES = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_ORACLE_DIR_NAMES = {
+    "test", "tests", "__tests__", "spec", "specs",
+    "__snapshots__", "snapshot", "snapshots", "golden", "goldens",
+}
 TEST_ORACLE_SUFFIXES = (
     ".test.js", ".test.jsx", ".test.ts", ".test.tsx",
     ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx",
@@ -596,6 +599,12 @@ def _looks_like_test_oracle_path(path: str) -> bool:
     if parts & TEST_ORACLE_DIR_NAMES:
         return True
     if name.startswith("test_"):
+        return True
+    if (
+        name.endswith(".snap")
+        or ".approved." in name
+        or name.endswith(".golden")
+    ):
         return True
     return any(name.endswith(suffix) for suffix in TEST_ORACLE_SUFFIXES)
 
