@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "benchmarks/run_historical_semantic_regressions.py"
+      - "src/modfactory/behavior_contract.py"
+      - "src/modfactory/external_patch.py"
       - ".github/workflows/historical-semantic-regressions.yml"
   push:
     paths:
