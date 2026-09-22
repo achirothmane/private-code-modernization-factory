@@ -171,6 +171,7 @@ import types
 import unittest
 
 root = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(root))
 pkg = types.ModuleType("tests")
 pkg.__path__ = [str(root / "tests")]
 pkg.__package__ = "tests"
