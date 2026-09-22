@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 from modfactory.model_bench import (
     OpenAICompatibleAdapter,
+    _git_apply,
+    _git_compatible_diff,
     build_model_request,
     inspect_unified_diff,
     run_model_request,
@@ -108,6 +110,26 @@ class ModelBenchmarkTests(unittest.TestCase):
                 "cost_usd": 0.0123,
             },
         }
+
+    def test_standard_git_diff_header_is_not_duplicated(self):
+        diff = (
+            "diff --git a/app.py b/app.py\n"
+            "index 3367afd..3e75765 100644\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
+        )
+
+        normalized = _git_compatible_diff(diff)
+
+        self.assertEqual(normalized.count("diff --git a/app.py b/app.py"), 1)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+            ok, detail = _git_apply(root, diff, check_only=True)
+            self.assertTrue(ok, detail)
 
     def test_openai_compatible_adapter_parses_structured_chat_completion(self):
         with TemporaryDirectory() as td:
