@@ -25,8 +25,10 @@ class ModelBenchmarkTests(unittest.TestCase):
     def _request_repo(self, root: Path) -> tuple[dict[str, object], dict[str, object]]:
         (root / "test").mkdir()
         (root / "test" / "a.test.js").write_text(
+            "var assert = require('assert');\n"
             "var request = require('request');\n"
-            "request.get('http://example.test', function () {});\n",
+            "request.get('http://example.test', function () {});\n"
+            "assert.ok(true);\n",
             encoding="utf-8",
         )
         (root / "test" / "b.test.js").write_text(
@@ -69,8 +71,10 @@ class ModelBenchmarkTests(unittest.TestCase):
                 }, indent=2) + "\n"
             ),
             "test/a.test.js": (
+                "var assert = require('assert');\n"
                 "var fetch = require('node-fetch');\n"
                 "fetch('http://example.test').then(function () {});\n"
+                "assert.ok(true);\n"
             ),
             "test/b.test.js": (
                 "const fetch = require('node-fetch');\n"
@@ -217,6 +221,100 @@ class ModelBenchmarkTests(unittest.TestCase):
             self.assertTrue(request_path.exists())
             self.assertTrue(json_path.exists())
             self.assertTrue(md_path.exists())
+
+    def test_project_tests_cannot_pass_when_patch_modifies_the_test_oracle(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _, request = self._request_repo(root)
+            changes = {
+                "package.json": (
+                    json.dumps({
+                        "scripts": {"test": "node test/a.test.js"},
+                        "devDependencies": {"node-fetch": "2.7.0"},
+                    }, indent=2) + "\n"
+                ),
+                "test/a.test.js": (
+                    "var fetch = require('node-fetch');\n"
+                    "fetch('http://example.test').then(function () {});\n"
+                ),
+                "test/b.test.js": (
+                    "const fetch = require('node-fetch');\n"
+                    "fetch('http://example.test', { method: 'POST' }).then(function () {});\n"
+                ),
+            }
+            chunks = []
+            for rel, after in changes.items():
+                before = (root / rel).read_text(encoding="utf-8")
+                chunks.extend(difflib.unified_diff(
+                    before.splitlines(keepends=True),
+                    after.splitlines(keepends=True),
+                    fromfile=f"a/{rel}",
+                    tofile=f"b/{rel}",
+                ))
+            response = self._response(request, "".join(chunks))
+
+            fake_pass = {
+                "command": "npm test",
+                "status": "PASS",
+                "returncode": 0,
+                "duration_seconds": 0.01,
+            }
+            with patch("modfactory.model_bench._run_command", return_value=fake_pass):
+                score = score_model_response(
+                    root,
+                    request,
+                    response,
+                    allow_project_code=True,
+                    timeout_seconds=30,
+                )
+
+            self.assertEqual(score["status"], "BLOCKED", score)
+            self.assertEqual(score["reason"], "verification-oracle-modified")
+            self.assertFalse(score["gates"]["verification_oracle_unchanged"])
+            self.assertEqual(score["project_tests"]["after"], [])
+            reasons = {item["reason"] for item in score["oracle_violations"]}
+            self.assertIn("test-oracle-file-modified", reasons)
+
+    def test_project_tests_cannot_pass_when_package_test_script_changes(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            _, request = self._request_repo(root)
+            diff = self._valid_diff(root)
+            original_package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+            changed_package = {
+                **original_package,
+                "scripts": {"test": "node -e \"process.exit(0)\""},
+                "devDependencies": {"node-fetch": "2.7.0"},
+            }
+            package_diff = "".join(difflib.unified_diff(
+                (root / "package.json").read_text(encoding="utf-8").splitlines(keepends=True),
+                (json.dumps(changed_package, indent=2) + "\n").splitlines(keepends=True),
+                fromfile="a/package.json",
+                tofile="b/package.json",
+            ))
+            # Replace only the package.json portion of the otherwise-valid migration.
+            first_test_header = diff.find("--- a/test/a.test.js")
+            response = self._response(request, package_diff + diff[first_test_header:])
+
+            fake_pass = {
+                "command": "npm test",
+                "status": "PASS",
+                "returncode": 0,
+                "duration_seconds": 0.01,
+            }
+            with patch("modfactory.model_bench._run_command", return_value=fake_pass):
+                score = score_model_response(
+                    root,
+                    request,
+                    response,
+                    allow_project_code=True,
+                    timeout_seconds=30,
+                )
+
+            self.assertEqual(score["status"], "BLOCKED", score)
+            self.assertEqual(score["reason"], "verification-oracle-modified")
+            reasons = {item["reason"] for item in score["oracle_violations"]}
+            self.assertIn("package-test-script-contract-modified", reasons)
 
     def test_out_of_scope_file_is_rejected_before_patch_application(self):
         with TemporaryDirectory() as td:

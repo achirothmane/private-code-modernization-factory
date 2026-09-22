@@ -12,9 +12,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable, Protocol
 
+from .commands import discover_commands
 from .model_eval import _npm_usage_sites
 from .scanner import scan_repository
-from .verification import _copy_repository, _finding_key, _run_test_commands
+from .verification import _copy_repository, _finding_key, _run_command
 
 
 RESPONSE_SCHEMA_VERSION = 1
@@ -567,6 +568,73 @@ def _legacy_usage_remaining(root: Path, task: dict[str, object]) -> list[str]:
     return [path.relative_to(root).as_posix() for path in _npm_usage_sites(root, package)]
 
 
+TEST_ORACLE_DIR_NAMES = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_ORACLE_SUFFIXES = (
+    ".test.js", ".test.jsx", ".test.ts", ".test.tsx",
+    ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx",
+    "_test.py", "_tests.py", "_test.go", "_test.rs",
+)
+TEST_EXECUTION_CONFIG_NAMES = {
+    "pytest.ini", "tox.ini", "conftest.py", "Makefile",
+}
+
+
+def _looks_like_test_oracle_path(path: str) -> bool:
+    candidate = Path(path)
+    parts = {part.lower() for part in candidate.parts}
+    name = candidate.name.lower()
+    if parts & TEST_ORACLE_DIR_NAMES:
+        return True
+    if name.startswith("test_"):
+        return True
+    return any(name.endswith(suffix) for suffix in TEST_ORACLE_SUFFIXES)
+
+
+def _package_scripts(root: Path) -> dict[str, object] | None:
+    path = root / "package.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    scripts = payload.get("scripts")
+    return scripts if isinstance(scripts, dict) else {}
+
+
+def _test_command_contract(root: Path, snapshot: object, limit: int = 3) -> list[tuple[str, str]]:
+    return [
+        (str(item.get("command", "")), str(item.get("source", "")))
+        for item in discover_commands(root, snapshot)
+        if item.get("kind") == "test"
+    ][:limit]
+
+
+def _verification_oracle_violations(
+    before_root: Path,
+    after_root: Path,
+    changed_files: set[str],
+) -> list[dict[str, str]]:
+    violations: list[dict[str, str]] = []
+    for path in sorted(changed_files):
+        if _looks_like_test_oracle_path(path):
+            violations.append({"path": path, "reason": "test-oracle-file-modified"})
+        elif Path(path).name in TEST_EXECUTION_CONFIG_NAMES:
+            violations.append({"path": path, "reason": "test-execution-config-modified"})
+
+    if "package.json" in changed_files:
+        before_scripts = _package_scripts(before_root)
+        after_scripts = _package_scripts(after_root)
+        if before_scripts != after_scripts:
+            violations.append({
+                "path": "package.json",
+                "reason": "package-test-script-contract-modified",
+            })
+    return violations
+
+
 def _static_compare(
     before_root: Path,
     after_root: Path,
@@ -773,21 +841,23 @@ def score_model_response(
 
         before_snapshot = scan_repository(before_root, targets=target_profile)
         after_snapshot = scan_repository(after_root, targets=target_profile)
-        before_tests = _run_test_commands(before_root, before_snapshot, timeout_seconds)
-        after_tests = _run_test_commands(after_root, after_snapshot, timeout_seconds)
+        before_contract = _test_command_contract(before_root, before_snapshot)
+        after_contract = _test_command_contract(after_root, after_snapshot)
+        gates["test_command_contract_unchanged"] = before_contract == after_contract
+
+        baseline_commands = [command for command, _source in before_contract]
+        before_tests = [
+            _run_command(command, before_root, timeout_seconds)
+            for command in baseline_commands
+        ]
         project_tests = {
             "executed": True,
             "before": before_tests,
-            "after": after_tests,
+            "after": [],
         }
         base["project_tests"] = project_tests
         gates["baseline_tests_pass"] = bool(before_tests) and all(
             item.get("status") == "PASS" for item in before_tests
-        )
-        gates["patched_tests_pass"] = (
-            len(after_tests) == len(before_tests)
-            and bool(after_tests)
-            and all(item.get("status") == "PASS" for item in after_tests)
         )
 
         if not gates["baseline_tests_pass"]:
@@ -797,6 +867,40 @@ def score_model_response(
                 "reason": "baseline-failed-before",
                 "verification_level": "tests-before",
             }
+
+        oracle_violations = _verification_oracle_violations(
+            before_root,
+            after_root,
+            changed,
+        )
+        gates["verification_oracle_unchanged"] = (
+            not oracle_violations and bool(gates["test_command_contract_unchanged"])
+        )
+        if not gates["verification_oracle_unchanged"]:
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": "verification-oracle-modified",
+                "verification_level": "tests-before",
+                "oracle_violations": oracle_violations,
+                "test_command_contract_before": before_contract,
+                "test_command_contract_after": after_contract,
+            }
+
+        # Execute exactly the baseline-discovered commands after the patch. Never
+        # rediscover a weaker command set from the patched repository and then
+        # use that weaker set as evidence for PASS.
+        after_tests = [
+            _run_command(command, after_root, timeout_seconds)
+            for command in baseline_commands
+        ]
+        project_tests["after"] = after_tests
+        gates["patched_tests_pass"] = (
+            len(after_tests) == len(before_tests)
+            and bool(after_tests)
+            and all(item.get("status") == "PASS" for item in after_tests)
+        )
+
         if not gates["patched_tests_pass"]:
             return {
                 **base,
