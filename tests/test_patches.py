@@ -2,7 +2,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from modfactory.patches import build_patch_proposal, validate_proposal_scope, write_patch_proposal
+from modfactory.patches import (
+    _transform_collections_abc,
+    _transform_reactdom_render,
+    build_patch_proposal,
+    validate_proposal_scope,
+    write_patch_proposal,
+)
 from modfactory.scanner import scan_repository
 from modfactory.slices import build_migration_slices
 
@@ -61,6 +67,23 @@ class PatchProposalTests(unittest.TestCase):
             self.assertFalse(proposal["auto_merges"])
             self.assertIn("from collections.abc import MutableMapping", proposal["diff"])
             self.assertEqual((root / "app.py").read_text(encoding="utf-8"), original)
+
+    def test_collections_transform_does_not_modify_strings_or_comments(self):
+        source = (
+            "import collections\n"
+            "LABEL = 'collections.Mapping'\n"
+            "# collections.MutableMapping must stay documentation\n"
+            "class Config(collections.Mapping):\n"
+            "    pass\n"
+        )
+
+        updated, blocked = _transform_collections_abc(source)
+
+        self.assertIsNone(blocked)
+        self.assertIn("class Config(collections.abc.Mapping):", updated)
+        self.assertIn("LABEL = 'collections.Mapping'", updated)
+        self.assertIn("# collections.MutableMapping must stay documentation", updated)
+        self.assertNotIn("LABEL = 'collections.abc.Mapping'", updated)
 
     def test_semantic_imp_recipe_is_blocked_until_transform_exists(self):
         with TemporaryDirectory() as td:
@@ -153,6 +176,22 @@ class PatchProposalTests(unittest.TestCase):
             self.assertIn("const tooltipContainerRoot = createRoot(tooltipContainer)", proposal["diff"])
             self.assertIn("tooltipContainerRoot.render(<Tip />)", proposal["diff"])
             self.assertEqual(proposal["diff"].count("tooltipContainerRoot = createRoot"), 1)
+
+    def test_react_create_portal_keeps_reactdom_binding(self):
+        source = (
+            "import ReactDOM from 'react-dom'\n"
+            "const portal = ReactDOM.createPortal(<Modal />, document.body)\n"
+            "ReactDOM.render(<App />, document.getElementById('root'))\n"
+        )
+
+        updated, blocked = _transform_reactdom_render(source, "src/index.tsx")
+
+        self.assertIsNone(blocked)
+        self.assertIn("import ReactDOM from 'react-dom'", updated)
+        self.assertIn("import { createRoot } from 'react-dom/client'", updated)
+        self.assertIn("ReactDOM.createPortal(<Modal />, document.body)", updated)
+        self.assertIn("createRoot(document.getElementById('root')!).render(<App />)", updated)
+        self.assertNotIn("ReactDOM.render(", updated)
 
     def test_react_unknown_container_lifetime_is_blocked(self):
         with TemporaryDirectory() as td:
