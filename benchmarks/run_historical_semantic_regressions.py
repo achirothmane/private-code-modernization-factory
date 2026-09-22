@@ -167,7 +167,8 @@ def _peewee_case(work: Path) -> dict[str, object]:
     # alter the keys/regressions SQLite tests under measurement.
     test_runner = (
         "import runpy, sys; "
-        "sys.modules['psycopg2'] = None; "
+        "import playhouse.postgres_ext as pg; "
+        "pg.Json = type('BenchmarkJson', (), {'__init__': lambda self, value=None, **kwargs: setattr(self, 'value', value)}); "
         "sys.argv = ['runtests.py', 'keys', 'regressions']; "
         "runpy.run_path('runtests.py', run_name='__main__')"
     )
