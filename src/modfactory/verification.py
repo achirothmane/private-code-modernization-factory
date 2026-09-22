@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import shlex
 import shutil
@@ -43,7 +44,7 @@ def _copy_repository(source: Path, destination: Path) -> None:
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns(
             ".git", ".hg", ".svn", ".modfactory", ".pytest_cache",
-            ".mypy_cache", "__pycache__", ".venv", "venv", "node_modules",
+            ".mypy_cache", "__pycache__", ".venv", "venv", ".modfactory-env", "node_modules",
             "dist", "build",
         ),
     )
@@ -88,7 +89,13 @@ def _safe_argv(command: str) -> tuple[list[str] | None, str | None]:
     return argv, None
 
 
-def _run_command(command: str, cwd: Path, timeout_seconds: int) -> dict[str, object]:
+def _run_command(
+    command: str,
+    cwd: Path,
+    timeout_seconds: int,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
     argv, blocked_reason = _safe_argv(command)
     if blocked_reason:
         return {
@@ -104,6 +111,7 @@ def _run_command(command: str, cwd: Path, timeout_seconds: int) -> dict[str, obj
         completed = subprocess.run(
             argv,
             cwd=str(cwd),
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -186,11 +194,283 @@ def _dependency_inputs(root: Path, snapshot: RepoSnapshot) -> list[dict[str, str
     return result
 
 
+def _environment_strategy(root: Path, snapshot: RepoSnapshot) -> dict[str, object]:
+    steps: list[dict[str, object]] = []
+
+    if "Python" in snapshot.languages:
+        requirements = [
+            rel for rel in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt")
+            if (root / rel).is_file()
+        ]
+        python_step: dict[str, object] = {
+            "kind": "python-venv",
+            "directory": ".modfactory-env/python",
+            "requirements": requirements,
+            "install_project": False,
+        }
+        if not requirements and ((root / "pyproject.toml").is_file() or (root / "setup.py").is_file()):
+            python_step["install_project"] = True
+        steps.append(python_step)
+
+    if (root / "package.json").is_file():
+        if (root / "package-lock.json").is_file() or (root / "npm-shrinkwrap.json").is_file():
+            steps.append({
+                "kind": "npm-ci",
+                "lockfile": (
+                    "package-lock.json"
+                    if (root / "package-lock.json").is_file()
+                    else "npm-shrinkwrap.json"
+                ),
+            })
+        elif (root / "pnpm-lock.yaml").is_file():
+            steps.append({
+                "kind": "unsupported-node-lockfile",
+                "lockfile": "pnpm-lock.yaml",
+                "reason": "pnpm provisioning is not implemented yet",
+            })
+        elif (root / "yarn.lock").is_file():
+            steps.append({
+                "kind": "unsupported-node-lockfile",
+                "lockfile": "yarn.lock",
+                "reason": "yarn provisioning is not implemented yet",
+            })
+        else:
+            steps.append({
+                "kind": "unsupported-node-lockfile",
+                "lockfile": None,
+                "reason": "package.json has no reproducible npm lockfile",
+            })
+
+    supported = bool(steps) and all(
+        str(step.get("kind", "")).startswith(("python-venv", "npm-ci"))
+        for step in steps
+    )
+    return {
+        "supported": supported,
+        "steps": steps,
+    }
+
+
+def _run_argv(
+    argv: list[str],
+    cwd: Path,
+    timeout_seconds: int,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "argv": argv,
+            "status": "TIMEOUT",
+            "reason": "timeout",
+            "returncode": None,
+            "duration_seconds": round(time.perf_counter() - started, 4),
+            "stdout_tail": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
+            "stderr_tail": (exc.stderr or "")[-4000:] if isinstance(exc.stderr, str) else "",
+        }
+    except OSError as exc:
+        return {
+            "argv": argv,
+            "status": "ERROR",
+            "reason": str(exc),
+            "returncode": None,
+            "duration_seconds": round(time.perf_counter() - started, 4),
+        }
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    return {
+        "argv": argv,
+        "status": "PASS" if completed.returncode == 0 else "FAIL",
+        "returncode": completed.returncode,
+        "duration_seconds": round(time.perf_counter() - started, 4),
+        "stdout_sha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr.encode("utf-8")).hexdigest(),
+        "stdout_tail": stdout[-4000:],
+        "stderr_tail": stderr[-4000:],
+    }
+
+
+def provision_verification_environment(
+    root: str | Path,
+    contract: dict[str, object],
+    *,
+    timeout_seconds: int,
+) -> tuple[dict[str, str] | None, dict[str, object]]:
+    root_path = Path(root).resolve()
+    environment_model = contract.get("environment_model")
+    if not isinstance(environment_model, dict):
+        return None, {
+            "status": "BLOCKED",
+            "reason": "environment-model-missing",
+            "steps": [],
+        }
+    strategy = environment_model.get("strategy")
+    if not isinstance(strategy, dict) or not strategy.get("supported"):
+        return None, {
+            "status": "BLOCKED",
+            "reason": "environment-strategy-unsupported",
+            "strategy": strategy,
+            "steps": [],
+        }
+
+    runtime_env = os.environ.copy()
+    evidence_steps: list[dict[str, object]] = []
+    steps = strategy.get("steps", [])
+    if not isinstance(steps, list):
+        return None, {
+            "status": "BLOCKED",
+            "reason": "environment-strategy-invalid",
+            "steps": [],
+        }
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        kind = str(step.get("kind", ""))
+        if kind == "python-venv":
+            rel_dir = str(step.get("directory", ".modfactory-env/python"))
+            env_dir = (root_path / rel_dir).resolve()
+            try:
+                env_dir.relative_to(root_path)
+            except ValueError:
+                return None, {
+                    "status": "BLOCKED",
+                    "reason": "environment-path-escapes-root",
+                    "steps": evidence_steps,
+                }
+
+            create = _run_argv(
+                [sys.executable, "-m", "venv", str(env_dir)],
+                root_path,
+                timeout_seconds,
+            )
+            evidence_steps.append({"kind": "python-venv-create", **create})
+            if create.get("status") != "PASS":
+                return None, {
+                    "status": "BLOCKED",
+                    "reason": "python-venv-create-failed",
+                    "steps": evidence_steps,
+                }
+
+            bin_dir = env_dir / ("Scripts" if os.name == "nt" else "bin")
+            python_executable = bin_dir / ("python.exe" if os.name == "nt" else "python")
+            runtime_env["VIRTUAL_ENV"] = str(env_dir)
+            runtime_env["PATH"] = str(bin_dir) + os.pathsep + runtime_env.get("PATH", "")
+
+            requirements = step.get("requirements", [])
+            if isinstance(requirements, list):
+                for rel in requirements:
+                    req = root_path / str(rel)
+                    try:
+                        content = req.read_text(encoding="utf-8", errors="ignore")
+                    except OSError:
+                        content = ""
+                    if not content.strip():
+                        evidence_steps.append({
+                            "kind": "python-requirements",
+                            "path": str(rel),
+                            "status": "PASS",
+                            "reason": "empty-requirements",
+                            "duration_seconds": 0.0,
+                        })
+                        continue
+                    install = _run_argv(
+                        [
+                            str(python_executable),
+                            "-m", "pip", "install",
+                            "--disable-pip-version-check",
+                            "-r", str(req),
+                        ],
+                        root_path,
+                        timeout_seconds,
+                        env=runtime_env,
+                    )
+                    evidence_steps.append({
+                        "kind": "python-requirements",
+                        "path": str(rel),
+                        **install,
+                    })
+                    if install.get("status") != "PASS":
+                        return None, {
+                            "status": "BLOCKED",
+                            "reason": "python-dependency-install-failed",
+                            "steps": evidence_steps,
+                        }
+
+            if step.get("install_project"):
+                install_project = _run_argv(
+                    [
+                        str(python_executable),
+                        "-m", "pip", "install",
+                        "--disable-pip-version-check",
+                        "-e", ".",
+                    ],
+                    root_path,
+                    timeout_seconds,
+                    env=runtime_env,
+                )
+                evidence_steps.append({
+                    "kind": "python-project-install",
+                    **install_project,
+                })
+                if install_project.get("status") != "PASS":
+                    return None, {
+                        "status": "BLOCKED",
+                        "reason": "python-project-install-failed",
+                        "steps": evidence_steps,
+                    }
+
+        elif kind == "npm-ci":
+            install = _run_argv(
+                ["npm", "ci", "--no-audit", "--no-fund"],
+                root_path,
+                timeout_seconds,
+                env=runtime_env,
+            )
+            evidence_steps.append({"kind": "npm-ci", **install})
+            if install.get("status") != "PASS":
+                return None, {
+                    "status": "BLOCKED",
+                    "reason": "npm-ci-failed",
+                    "steps": evidence_steps,
+                }
+        else:
+            return None, {
+                "status": "BLOCKED",
+                "reason": "environment-strategy-unsupported",
+                "steps": evidence_steps,
+            }
+
+    return runtime_env, {
+        "status": "PASS",
+        "reason": "environment-provisioned",
+        "steps": evidence_steps,
+        "runtime": {
+            "virtual_env": runtime_env.get("VIRTUAL_ENV"),
+            "path_prefix": runtime_env.get("PATH", "").split(os.pathsep)[0],
+        },
+    }
+
+
 def build_verification_contract(
     root: str | Path,
     snapshot: RepoSnapshot,
     *,
     command_limit: int = 12,
+    isolated_dependencies: bool = False,
 ) -> dict[str, object]:
     root_path = Path(root).resolve()
     commands = []
@@ -209,12 +489,22 @@ def build_verification_contract(
         "commands": commands,
         "dependency_inputs": _dependency_inputs(root_path, snapshot),
         "runtime_fingerprint": _runtime_fingerprint(),
-        "environment_model": {
-            "baseline_target_isolation": "shared-host",
-            "dependency_provisioning": "external",
-            "separate_dependency_environments": False,
-            "deployment_evidence": False,
-        },
+        "environment_model": (
+            {
+                "baseline_target_isolation": "separate-temp-workspaces",
+                "dependency_provisioning": "managed",
+                "separate_dependency_environments": True,
+                "deployment_evidence": False,
+                "strategy": _environment_strategy(root_path, snapshot),
+            }
+            if isolated_dependencies
+            else {
+                "baseline_target_isolation": "shared-host",
+                "dependency_provisioning": "external",
+                "separate_dependency_environments": False,
+                "deployment_evidence": False,
+            }
+        ),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return {
@@ -247,6 +537,7 @@ def run_verification_contract(
     contract: dict[str, object],
     *,
     timeout_seconds: int,
+    execution_env: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     valid, errors = validate_verification_contract(contract)
     if not valid:
@@ -295,6 +586,7 @@ def run_verification_contract(
                     str(item.get("command", "")),
                     cwd,
                     timeout_seconds,
+                    env=execution_env,
                 )
         results.append({
             "kind": str(item.get("kind", "")),
@@ -332,6 +624,7 @@ def build_differential_verification(
     diff_budget: int = 80,
     allow_project_code: bool = False,
     timeout_seconds: int = 120,
+    provision_environments: bool = False,
 ) -> dict[str, object]:
     root_path = Path(root).resolve()
     proposal = build_patch_proposal(
@@ -361,6 +654,11 @@ def build_differential_verification(
             "after": [],
         },
         "verification_contract": None,
+        "environment_evidence": {
+            "requested": provision_environments,
+            "before": None,
+            "after": None,
+        },
         "deployment_admissible": False,
         "requires_human_review": True,
     }
@@ -459,7 +757,11 @@ def build_differential_verification(
                 "deployment_admissible": False,
             }
 
-        contract = build_verification_contract(before_root, before_snapshot)
+        contract = build_verification_contract(
+            before_root,
+            before_snapshot,
+            isolated_dependencies=provision_environments,
+        )
         result["verification_contract"] = contract
         contract_commands = contract.get("commands", [])
         test_commands = [
@@ -474,10 +776,42 @@ def build_differential_verification(
                 "verification_level": "static",
             }
 
+        before_env = None
+        after_env = None
+        if provision_environments:
+            before_env, before_environment = provision_verification_environment(
+                before_root,
+                contract,
+                timeout_seconds=timeout_seconds,
+            )
+            result["environment_evidence"]["before"] = before_environment
+            if before_env is None:
+                return {
+                    **result,
+                    "status": "BLOCKED",
+                    "reason": "baseline-environment-provisioning-failed",
+                    "verification_level": "environment-before",
+                }
+
+            after_env, after_environment = provision_verification_environment(
+                after_root,
+                contract,
+                timeout_seconds=timeout_seconds,
+            )
+            result["environment_evidence"]["after"] = after_environment
+            if after_env is None:
+                return {
+                    **result,
+                    "status": "BLOCKED",
+                    "reason": "target-environment-provisioning-failed",
+                    "verification_level": "environment-after",
+                }
+
         before_checks = run_verification_contract(
             before_root,
             contract,
             timeout_seconds=timeout_seconds,
+            execution_env=before_env,
         )
         after_checks: list[dict[str, object]] = []
         project_checks = {
@@ -506,6 +840,7 @@ def build_differential_verification(
             after_root,
             contract,
             timeout_seconds=timeout_seconds,
+            execution_env=after_env,
         )
         project_checks["after"] = after_checks
         result["project_tests"]["after"] = _test_results(after_checks)
@@ -546,12 +881,19 @@ def build_differential_verification(
         return {
             **result,
             "status": "PASS",
-            "reason": "verification-contract-pass-shared-host",
-            "verification_level": "contract-shared-host",
+            "reason": (
+                "verification-contract-pass-isolated-dependencies"
+                if provision_environments
+                else "verification-contract-pass-shared-host"
+            ),
+            "verification_level": (
+                "contract-isolated-dependencies"
+                if provision_environments
+                else "contract-shared-host"
+            ),
             "performance_observation": performance,
-            # Passing a pinned command contract on two temporary copies is useful
-            # regression evidence, but it is not yet deployment evidence because
-            # dependencies are not provisioned into isolated baseline/target envs.
+            # Separate dependency environments remove host dependency leakage,
+            # but they still do not reproduce a production OS/container/runtime.
             "deployment_admissible": False,
         }
 
