@@ -18,6 +18,7 @@ from .verification import (
     _copy_repository,
     _finding_key,
     build_verification_contract,
+    provision_verification_environment,
     run_verification_contract,
 )
 
@@ -682,6 +683,7 @@ def score_model_response(
     *,
     allow_project_code: bool = False,
     timeout_seconds: int = 120,
+    provision_environments: bool = False,
 ) -> dict[str, object]:
     root = Path(repository).resolve()
     request_valid, request_errors = validate_request_integrity(request)
@@ -710,6 +712,11 @@ def score_model_response(
         "project_tests": {"executed": False, "before": [], "after": []},
         "project_checks": {"executed": False, "before": [], "after": []},
         "verification_contract": None,
+        "environment_evidence": {
+            "requested": provision_environments,
+            "before": None,
+            "after": None,
+        },
         "deployment_admissible": False,
     }
     if not request_valid:
@@ -840,8 +847,16 @@ def score_model_response(
 
         before_snapshot = scan_repository(before_root, targets=target_profile)
         after_snapshot = scan_repository(after_root, targets=target_profile)
-        before_contract = build_verification_contract(before_root, before_snapshot)
-        after_contract = build_verification_contract(after_root, after_snapshot)
+        before_contract = build_verification_contract(
+            before_root,
+            before_snapshot,
+            isolated_dependencies=provision_environments,
+        )
+        after_contract = build_verification_contract(
+            after_root,
+            after_snapshot,
+            isolated_dependencies=provision_environments,
+        )
         base["verification_contract"] = before_contract
 
         def command_signature(contract: dict[str, object]) -> list[tuple[str, str, str, str]]:
@@ -865,10 +880,62 @@ def score_model_response(
             before_command_contract == after_command_contract
         )
 
+        oracle_violations = _verification_oracle_violations(
+            before_root,
+            after_root,
+            changed,
+        )
+        gates["verification_oracle_unchanged"] = (
+            not oracle_violations
+            and bool(gates["verification_command_contract_unchanged"])
+        )
+        if not gates["verification_oracle_unchanged"]:
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": "verification-oracle-modified",
+                "verification_level": "contract-before",
+                "oracle_violations": oracle_violations,
+                "verification_command_contract_before": before_command_contract,
+                "verification_command_contract_after": after_command_contract,
+            }
+
+        before_env = None
+        after_env = None
+        if provision_environments:
+            before_env, before_environment = provision_verification_environment(
+                before_root,
+                before_contract,
+                timeout_seconds=timeout_seconds,
+            )
+            base["environment_evidence"]["before"] = before_environment
+            if before_env is None:
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "baseline-environment-provisioning-failed",
+                    "verification_level": "environment-before",
+                }
+
+            after_env, after_environment = provision_verification_environment(
+                after_root,
+                before_contract,
+                timeout_seconds=timeout_seconds,
+            )
+            base["environment_evidence"]["after"] = after_environment
+            if after_env is None:
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "target-environment-provisioning-failed",
+                    "verification_level": "environment-after",
+                }
+
         before_checks = run_verification_contract(
             before_root,
             before_contract,
             timeout_seconds=timeout_seconds,
+            execution_env=before_env,
         )
         base["project_checks"] = {
             "executed": True,
@@ -900,32 +967,13 @@ def score_model_response(
                 "verification_level": "contract-before",
             }
 
-        oracle_violations = _verification_oracle_violations(
-            before_root,
-            after_root,
-            changed,
-        )
-        gates["verification_oracle_unchanged"] = (
-            not oracle_violations
-            and bool(gates["verification_command_contract_unchanged"])
-        )
-        if not gates["verification_oracle_unchanged"]:
-            return {
-                **base,
-                "status": "BLOCKED",
-                "reason": "verification-oracle-modified",
-                "verification_level": "contract-before",
-                "oracle_violations": oracle_violations,
-                "verification_command_contract_before": before_command_contract,
-                "verification_command_contract_after": after_command_contract,
-            }
-
         # Execute the exact baseline contract after the patch; never rediscover
         # a weaker command set from the patched repository.
         after_checks = run_verification_contract(
             after_root,
             before_contract,
             timeout_seconds=timeout_seconds,
+            execution_env=after_env,
         )
         base["project_checks"]["after"] = after_checks
         after_tests = [item for item in after_checks if item.get("kind") == "test"]
@@ -947,8 +995,16 @@ def score_model_response(
         return {
             **base,
             "status": "PASS",
-            "reason": "verification-contract-pass-shared-host",
-            "verification_level": "contract-shared-host",
+            "reason": (
+                "verification-contract-pass-isolated-dependencies"
+                if provision_environments
+                else "verification-contract-pass-shared-host"
+            ),
+            "verification_level": (
+                "contract-isolated-dependencies"
+                if provision_environments
+                else "contract-shared-host"
+            ),
             "deployment_admissible": False,
         }
 
