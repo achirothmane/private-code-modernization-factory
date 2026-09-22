@@ -174,7 +174,7 @@ def _compact_modfactory(result: dict[str, object]) -> dict[str, object]:
 
 
 def main() -> int:
-    output = Path("benchmark-results") / "external-patch-evidence"
+    output = (Path("benchmark-results") / "external-patch-evidence").resolve()
     output.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="modfactory-external-evidence-") as td:
