@@ -43,6 +43,8 @@ def main() -> int:
         for case in CASES:
             base = case["base"]
             head = case["head"]
+            run(["git", "fetch", "--quiet", "origin", base], upstream)
+            run(["git", "fetch", "--quiet", "origin", head], upstream)
             run(["git", "checkout", "--quiet", base], upstream)
             changed = [line.strip() for line in run(["git", "diff", "--name-only", base, head], upstream).splitlines() if line.strip()]
             oracle_paths = [path for path in changed if is_snapshot_or_golden(path)]
