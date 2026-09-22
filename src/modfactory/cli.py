@@ -53,7 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--diff-budget", type=int, default=DEFAULT_DIFF_BUDGET,
                         help="Maximum added+removed lines allowed in the underlying proposal")
     verify.add_argument("--allow-project-code", action="store_true",
-                        help="Explicitly allow discovered test commands to run in temporary copies")
+                        help="Explicitly allow discovered project commands to run in temporary copies")
+    verify.add_argument("--provision-environments", action="store_true",
+                        help="Provision separate baseline/target dependency environments before executing the contract")
     verify.add_argument("--timeout", type=int, default=120,
                         help="Per-command timeout in seconds when project-code execution is enabled")
 
@@ -92,7 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     model_score.add_argument("--response", required=True, help="Path to provider response JSON")
     model_score.add_argument("--output", default=".modfactory", help="Output directory")
     model_score.add_argument("--allow-project-code", action="store_true",
-                             help="Explicitly allow discovered project test commands in temporary copies")
+                             help="Explicitly allow discovered project commands in temporary copies")
+    model_score.add_argument("--provision-environments", action="store_true",
+                             help="Provision separate baseline/target dependency environments before scoring")
     model_score.add_argument("--timeout", type=int, default=120,
                              help="Per-command timeout in seconds when project-code execution is enabled")
 
@@ -170,6 +174,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.timeout < 1:
             print("--timeout must be >= 1", file=sys.stderr)
             return 2
+        if args.provision_environments and not args.allow_project_code:
+            print("--provision-environments requires --allow-project-code", file=sys.stderr)
+            return 2
         snapshot = scan_repository(args.repository, targets=target_profile)
         result = build_differential_verification(
             args.repository,
@@ -178,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             diff_budget=args.diff_budget,
             allow_project_code=args.allow_project_code,
             timeout_seconds=args.timeout,
+            provision_environments=args.provision_environments,
         )
         json_path, md_path = write_verification(result, args.output)
         print(f"Verification: {result['status']}")
@@ -273,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.timeout < 1:
             print("--timeout must be >= 1", file=sys.stderr)
             return 2
+        if args.provision_environments and not args.allow_project_code:
+            print("--provision-environments requires --allow-project-code", file=sys.stderr)
+            return 2
         try:
             request = load_request(args.request)
             response = load_response(args.response)
@@ -285,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
             response,
             allow_project_code=args.allow_project_code,
             timeout_seconds=args.timeout,
+            provision_environments=args.provision_environments,
         )
         json_path, md_path = write_model_score(score, args.output)
         print(f"Score status: {score['status']}")
