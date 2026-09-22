@@ -6,6 +6,10 @@ on:
     paths:
       - "benchmarks/run_external_patch_evidence.py"
       - ".github/workflows/external-patch-evidence.yml"
+  pull_request:
+    paths:
+      - "benchmarks/run_external_patch_evidence.py"
+      - ".github/workflows/external-patch-evidence.yml"
 
 permissions:
   contents: read
