@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "commands": [
+    {
+      "id": "value-remains-one",
+      "command": "python -c \"assert __import__('app').VALUE == 1\"",
+      "working_directory": "."
+    }
+  ]
+}

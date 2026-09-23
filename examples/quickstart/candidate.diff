@@ -1,0 +1,12 @@
+diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1 +1 @@
+-VALUE = 1
++VALUE = 2
+diff --git a/tests/__snapshots__/value.snap b/tests/__snapshots__/value.snap
+--- a/tests/__snapshots__/value.snap
++++ b/tests/__snapshots__/value.snap
+@@ -1 +1 @@
+-1
++2
