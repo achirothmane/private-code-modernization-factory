@@ -67,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify_patch.add_argument("repository", help="Path to baseline repository")
     verify_patch.add_argument("--patch", required=True, help="Path to immutable unified-diff patch artifact")
     verify_patch.add_argument("--producer", help="Optional producer metadata such as codex, copilot, claude, or openrewrite")
+    verify_patch.add_argument(
+        "--behavior-contract",
+        help="Path to an external behavior-contract JSON file used as independent acceptance evidence",
+    )
     verify_patch.add_argument("--output", default=".modfactory", help="Output directory")
     verify_patch.add_argument("--allow-project-code", action="store_true",
                               help="Explicitly allow frozen project commands to run in temporary copies")
@@ -222,12 +226,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.provision_environments and not args.allow_project_code:
             print("--provision-environments requires --allow-project-code", file=sys.stderr)
             return 2
+        if args.behavior_contract and not args.allow_project_code:
+            print("--behavior-contract requires --allow-project-code", file=sys.stderr)
+            return 2
         try:
             result = verify_external_patch(
                 args.repository,
                 args.patch,
                 targets=target_profile,
                 producer=args.producer,
+                behavior_contract=args.behavior_contract,
                 allow_project_code=args.allow_project_code,
                 provision_environments=args.provision_environments,
                 timeout_seconds=args.timeout,
