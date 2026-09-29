@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import time
@@ -543,9 +544,26 @@ def _git_compatible_diff(diff: str) -> str:
 
 def _git_apply(root: Path, diff: str, *, check_only: bool) -> tuple[bool, str]:
     diff = _git_compatible_diff(diff)
-    argv = ["git", "apply", "--recount", "--whitespace=nowarn"]
+    argv = ["git", "apply", "--no-index", "--recount", "--whitespace=nowarn"]
     if check_only:
         argv.append("--check")
+
+    # Candidate copies deliberately exclude .git. Explicit --no-index plus a
+    # sanitized environment prevents an unrelated parent checkout or inherited
+    # GIT_DIR/GIT_WORK_TREE from redirecting application outside the candidate.
+    env = os.environ.copy()
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        env.pop(key, None)
+    env["GIT_CEILING_DIRECTORIES"] = str(root.resolve().parent)
+
     try:
         completed = subprocess.run(
             argv,
@@ -556,6 +574,7 @@ def _git_apply(root: Path, diff: str, *, check_only: bool) -> tuple[bool, str]:
             stderr=subprocess.PIPE,
             timeout=30,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
@@ -646,6 +665,86 @@ def _verification_oracle_violations(
     return violations
 
 
+def _tree_file_hashes(root: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(root).as_posix()
+            hashes[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def _tree_identity(root: Path) -> dict[str, object]:
+    files = _tree_file_hashes(root)
+    canonical = json.dumps(files, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return {
+        "tree_sha256": _sha256_text(canonical),
+        "files": files,
+    }
+
+
+def _candidate_identity(
+    before_root: Path,
+    after_root: Path,
+    declared_changed_files: set[str],
+    *,
+    patch_sha256: str,
+) -> dict[str, object]:
+    before = _tree_identity(before_root)
+    after = _tree_identity(after_root)
+    before_files = before["files"]
+    after_files = after["files"]
+    assert isinstance(before_files, dict)
+    assert isinstance(after_files, dict)
+
+    actual_changed = sorted(
+        path
+        for path in set(before_files) | set(after_files)
+        if before_files.get(path) != after_files.get(path)
+    )
+    declared = sorted(declared_changed_files)
+    changed_file_digests = []
+    for path in sorted(set(declared) | set(actual_changed)):
+        changed_file_digests.append({
+            "path": path,
+            "baseline_sha256": before_files.get(path),
+            "candidate_sha256": after_files.get(path),
+        })
+
+    return {
+        "version": 1,
+        "patch_sha256": patch_sha256,
+        "baseline_tree_sha256": before["tree_sha256"],
+        "candidate_tree_sha256": after["tree_sha256"],
+        "declared_changed_files": declared,
+        "actual_changed_files": actual_changed,
+        "changed_files_match": actual_changed == declared,
+        "candidate_differs_from_baseline": before["tree_sha256"] != after["tree_sha256"],
+        "no_op": not actual_changed,
+        "changed_file_digests": changed_file_digests,
+    }
+
+
+def _verification_oracle_identity(root: Path) -> dict[str, object]:
+    files: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if _looks_like_test_oracle_path(rel) or path.name in TEST_EXECUTION_CONFIG_NAMES:
+            files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    payload = {
+        "files": files,
+        "package_test_scripts": _package_scripts(root),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return {
+        "sha256": _sha256_text(canonical),
+        **payload,
+    }
+
+
 def _static_compare(
     before_root: Path,
     after_root: Path,
@@ -726,6 +825,8 @@ def score_model_response(
         "project_tests": {"executed": False, "before": [], "after": []},
         "project_checks": {"executed": False, "before": [], "after": []},
         "verification_contract": None,
+        "candidate_identity": None,
+        "verification_oracle_identity": None,
         "environment_evidence": {
             "requested": provision_environments,
             "before": None,
@@ -808,6 +909,36 @@ def score_model_response(
                 "reason": "patch-application-failed",
                 "patch_detail": apply_detail,
             }
+
+        candidate_identity = _candidate_identity(
+            before_root,
+            after_root,
+            changed,
+            patch_sha256=_sha256_text(diff),
+        )
+        base["candidate_identity"] = candidate_identity
+        if (
+            not candidate_identity["candidate_differs_from_baseline"]
+            or not candidate_identity["changed_files_match"]
+        ):
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": (
+                    "patch-produced-no-candidate-change"
+                    if candidate_identity["no_op"]
+                    else "candidate-identity-mismatch"
+                ),
+                "verification_level": "candidate-identity",
+            }
+
+        oracle_before = _verification_oracle_identity(before_root)
+        oracle_after = _verification_oracle_identity(after_root)
+        base["verification_oracle_identity"] = {
+            "before_sha256": oracle_before["sha256"],
+            "after_sha256": oracle_after["sha256"],
+            "unchanged": oracle_before["sha256"] == oracle_after["sha256"],
+        }
 
         static = _static_compare(before_root, after_root, task, target_profile)
         gates.update({
@@ -899,8 +1030,14 @@ def score_model_response(
             after_root,
             changed,
         )
+        oracle_identity = base.get("verification_oracle_identity")
+        oracle_identity_unchanged = bool(
+            isinstance(oracle_identity, dict)
+            and oracle_identity.get("unchanged") is True
+        )
         gates["verification_oracle_unchanged"] = (
             not oracle_violations
+            and oracle_identity_unchanged
             and bool(gates["verification_command_contract_unchanged"])
         )
         if not gates["verification_oracle_unchanged"]:
@@ -1050,6 +1187,27 @@ def write_model_score(score: dict[str, object], out_dir: str | Path) -> tuple[Pa
     if isinstance(gates, dict):
         for key in sorted(gates):
             lines.append(f"- {key}: {gates[key]}")
+    candidate_identity = score.get("candidate_identity")
+    oracle_identity = score.get("verification_oracle_identity")
+    lines.extend(["", "## Candidate identity", ""])
+    if isinstance(candidate_identity, dict):
+        lines.extend([
+            f"- Patch SHA-256: {candidate_identity.get('patch_sha256')}",
+            f"- Baseline tree SHA-256: {candidate_identity.get('baseline_tree_sha256')}",
+            f"- Candidate tree SHA-256: {candidate_identity.get('candidate_tree_sha256')}",
+            f"- Declared changed files: {candidate_identity.get('declared_changed_files', [])}",
+            f"- Actual changed files: {candidate_identity.get('actual_changed_files', [])}",
+            f"- Changed files match: {candidate_identity.get('changed_files_match')}",
+        ])
+    if isinstance(oracle_identity, dict):
+        lines.extend([
+            "",
+            "## Verification oracle identity",
+            "",
+            f"- Before SHA-256: {oracle_identity.get('before_sha256')}",
+            f"- After SHA-256: {oracle_identity.get('after_sha256')}",
+            f"- Unchanged: {oracle_identity.get('unchanged')}",
+        ])
     lines.extend([
         "",
         "Project code execution is opt-in. The original repository is never modified.",
