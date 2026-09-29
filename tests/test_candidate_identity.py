@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -77,6 +78,33 @@ class CandidateIdentityRegressionTests(unittest.TestCase):
             )
 
             ok, detail = _git_apply(candidate, diff, check_only=False)
+
+            self.assertTrue(ok, detail)
+            self.assertEqual(target.read_text(encoding="utf-8"), "VALUE = 2\n")
+
+    def test_git_apply_ignores_inherited_git_directory_and_worktree(self):
+        with TemporaryDirectory() as td:
+            parent = Path(td)
+            _init_git(parent)
+            candidate = parent / "candidate"
+            candidate.mkdir()
+            target = candidate / "app.py"
+            target.write_text("VALUE = 1\n", encoding="utf-8")
+            diff = (
+                "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+                "-VALUE = 1\n+VALUE = 2\n"
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GIT_DIR": str(parent / ".git"),
+                    "GIT_WORK_TREE": str(parent),
+                    "GIT_INDEX_FILE": str(parent / ".git" / "index"),
+                },
+                clear=False,
+            ):
+                ok, detail = _git_apply(candidate, diff, check_only=False)
 
             self.assertTrue(ok, detail)
             self.assertEqual(target.read_text(encoding="utf-8"), "VALUE = 2\n")
