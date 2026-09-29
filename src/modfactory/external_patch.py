@@ -6,7 +6,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .behavior_contract import load_behavior_contract, run_behavior_contract
-from .model_bench import _git_apply, _verification_oracle_violations, inspect_unified_diff
+from .model_bench import (
+    _candidate_identity,
+    _git_apply,
+    _verification_oracle_identity,
+    _verification_oracle_violations,
+    inspect_unified_diff,
+)
 from .scanner import scan_repository
 from .verification import (
     _copy_repository,
@@ -131,6 +137,8 @@ def verify_external_patch(
             "changed_files": changed_files,
         },
         "baseline_files": [],
+        "candidate_identity": None,
+        "verification_oracle_identity": None,
         "static_checks": {},
         "verification_contract": None,
         "target_contract_evidence": None,
@@ -206,6 +214,36 @@ def verify_external_patch(
                 "patch_detail": apply_detail,
             }
 
+        candidate_identity = _candidate_identity(
+            before_root,
+            after_root,
+            set(changed_files),
+            patch_sha256=patch_sha256,
+        )
+        base["candidate_identity"] = candidate_identity
+        if (
+            not candidate_identity["candidate_differs_from_baseline"]
+            or not candidate_identity["changed_files_match"]
+        ):
+            return {
+                **base,
+                "status": "BLOCKED",
+                "reason": (
+                    "patch-produced-no-candidate-change"
+                    if candidate_identity["no_op"]
+                    else "candidate-identity-mismatch"
+                ),
+                "verification_level": "candidate-identity",
+            }
+
+        oracle_before = _verification_oracle_identity(before_root)
+        oracle_after = _verification_oracle_identity(after_root)
+        base["verification_oracle_identity"] = {
+            "before_sha256": oracle_before["sha256"],
+            "after_sha256": oracle_after["sha256"],
+            "unchanged": oracle_before["sha256"] == oracle_after["sha256"],
+        }
+
         static = _static_repository_compare(before_root, after_root, target_profile)
         base["static_checks"] = static
         static_pass = bool(
@@ -227,7 +265,12 @@ def verify_external_patch(
             after_root,
             set(changed_files),
         )
-        if oracle_violations:
+        oracle_identity = base.get("verification_oracle_identity")
+        oracle_identity_unchanged = bool(
+            isinstance(oracle_identity, dict)
+            and oracle_identity.get("unchanged") is True
+        )
+        if oracle_violations or not oracle_identity_unchanged:
             return {
                 **base,
                 "status": "BLOCKED",
@@ -463,6 +506,27 @@ def render_external_patch_markdown(result: dict[str, object]) -> str:
         if isinstance(item, dict):
             lines.append(f"- {item.get('path')}: {item.get('sha256')}")
 
+    candidate_identity = result.get("candidate_identity")
+    lines.extend(["", "## Candidate identity", ""])
+    if isinstance(candidate_identity, dict):
+        lines.extend([
+            f"- Baseline tree SHA-256: {candidate_identity.get('baseline_tree_sha256')}",
+            f"- Candidate tree SHA-256: {candidate_identity.get('candidate_tree_sha256')}",
+            f"- Declared changed files: {candidate_identity.get('declared_changed_files', [])}",
+            f"- Actual changed files: {candidate_identity.get('actual_changed_files', [])}",
+            f"- Changed files match: {candidate_identity.get('changed_files_match')}",
+            f"- No-op: {candidate_identity.get('no_op')}",
+        ])
+
+    oracle_identity = result.get("verification_oracle_identity")
+    lines.extend(["", "## Verification oracle identity", ""])
+    if isinstance(oracle_identity, dict):
+        lines.extend([
+            f"- Before SHA-256: {oracle_identity.get('before_sha256')}",
+            f"- After SHA-256: {oracle_identity.get('after_sha256')}",
+            f"- Unchanged: {oracle_identity.get('unchanged')}",
+        ])
+
     behavior = result.get("behavior_contract", {})
     if isinstance(behavior, dict) and behavior.get("requested"):
         evidence = behavior.get("evidence")
@@ -477,7 +541,7 @@ def render_external_patch_markdown(result: dict[str, object]) -> str:
         "",
         "## Verification boundary",
         "",
-        "The patch producer is metadata only and does not affect the verdict. The original repository is never modified. PASS means the frozen evidence contract passed for this exact patch and baseline; it is not a deployment authorization.",
+        "The patch producer is metadata only and does not affect the verdict. The original repository is never modified. PASS requires candidate-identity evidence showing that the declared patch changed exactly the intended candidate paths, plus an unchanged protected verification oracle and the frozen evidence contract. Older PASS artifacts without candidate_identity do not carry this guarantee. PASS is not a deployment authorization.",
         "",
     ])
     return "\n".join(lines)

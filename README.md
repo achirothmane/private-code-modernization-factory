@@ -52,7 +52,9 @@ modfactory verify-patch /path/to/baseline-repo \
   --producer codex
 ~~~
 
-The producer is metadata only. ModFactory records the exact patch SHA-256, changed baseline-file hashes, changed paths, static before/after evidence, and any verification-oracle violations. The original repository is never modified.
+The producer is metadata only. ModFactory records the exact patch SHA-256, changed baseline-file hashes, the baseline-tree and candidate-tree SHA-256 identities, declared versus actual changed paths, the protected verification-oracle identity, static before/after evidence, and any verification-oracle violations. The original repository is never modified.
+
+Candidate application is isolated from any parent Git checkout and inherited Git worktree/directory settings. A successful `git apply` exit code is not accepted as proof by itself: ModFactory verifies that the candidate bytes actually changed on exactly the declared paths before project or behavior checks can support PASS.
 
 ## Decision model
 
@@ -165,14 +167,17 @@ When the missing acceptance behavior was supplied independently as an external f
 
 ModFactory currently guarantees only what its evidence supports:
 
-- exact patch and changed baseline files are content-addressed;
-- verification happens in temporary before/after copies;
-- recognized tests/snapshots/golden evidence cannot be silently weakened and still produce an independent PASS;
+- exact patch, baseline tree, candidate tree, and changed-file identities are content-addressed;
+- verification happens in temporary before/after copies whose patch application is isolated from parent/inherited Git context;
+- accidental no-op or partial/unexpected candidate application cannot produce PASS;
+- recognized tests/snapshots/golden evidence has a before/after oracle identity and cannot be silently weakened and still produce an independent PASS;
 - frozen project commands are reused before/after;
 - external behavior contracts are independent of the repository under review;
 - no stage auto-merges or deploys.
 
-It **does not** prove general semantic equivalence, invent missing behavior coverage automatically, turn PASS into production safety, sandbox arbitrary untrusted project code, or support every package manager/runtime/environment.
+It **does not** prove general semantic equivalence, invent missing behavior coverage automatically, turn PASS into production safety, sandbox arbitrary untrusted project code, or support every package manager/runtime/environment. Create/delete/rename patch forms remain explicitly unsupported by the current unified-diff contract rather than being guessed through.
+
+Verification artifacts created before candidate identity evidence was added are not retroactively upgraded: an older `PASS` without `candidate_identity` does not carry the current candidate-application guarantee.
 
 `deployment_admissible` remains false in the current verification paths.
 
