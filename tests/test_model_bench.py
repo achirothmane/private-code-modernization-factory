@@ -273,9 +273,10 @@ class ModelBenchmarkTests(unittest.TestCase):
             diff = (
                 "--- a/test/b.test.js\n"
                 "+++ b/test/b.test.js\n"
-                "@@ -1 +1 @@\n"
+                "@@ -1,2 +1,2 @@\n"
                 "-const request = require('request');\n"
                 "+const request = require('request');\n"
+                " request.post({ uri: 'http://example.test' }, function () {});\n"
             )
             response = self._response(request, diff)
 
