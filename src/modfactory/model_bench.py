@@ -1218,6 +1218,8 @@ def write_model_score(score: dict[str, object], out_dir: str | Path) -> tuple[Pa
             f"- Declared changed files: {candidate_identity.get('declared_changed_files', [])}",
             f"- Actual changed files: {candidate_identity.get('actual_changed_files', [])}",
             f"- Changed files match: {candidate_identity.get('changed_files_match')}",
+            f"- No-op: {candidate_identity.get('no_op')}",
+            f"- Intentional no-op: {candidate_identity.get('intentional_noop', False)}",
         ])
     if isinstance(oracle_identity, dict):
         lines.extend([
