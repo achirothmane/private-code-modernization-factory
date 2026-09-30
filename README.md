@@ -56,6 +56,16 @@ The producer is metadata only. ModFactory records the exact patch SHA-256, chang
 
 Candidate application is isolated from any parent Git checkout and inherited Git worktree/directory settings. A successful `git apply` exit code is not accepted as proof by itself: ModFactory verifies that the candidate bytes actually changed on exactly the declared paths before project or behavior checks can support PASS.
 
+An accidental no-op remains `BLOCKED`. If a caller intentionally wants to prove that a patch materializes **no byte change**, that must be explicit:
+
+~~~bash
+modfactory verify-patch /path/to/repo \
+  --patch /path/to/intentional-noop.diff \
+  --allow-noop
+~~~
+
+A confirmed intentional no-op returns `REVIEW — intentional-noop-confirmed`, records equal baseline/candidate tree identities and an unchanged verification-oracle identity, and never becomes deployment authorization. The opt-in does not make ordinary no-op patches pass.
+
 ## Decision model
 
 | Result | Meaning |
