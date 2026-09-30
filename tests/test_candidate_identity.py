@@ -194,6 +194,42 @@ class CandidateIdentityRegressionTests(unittest.TestCase):
             self.assertTrue(result["candidate_identity"]["no_op"])
             self.assertFalse(result["project_checks"]["executed"])
 
+    def test_intentional_noop_is_explicit_review_with_bound_identity(self):
+        with TemporaryDirectory() as td:
+            root = Path(td) / "source"
+            _repo(root)
+            patch_path = Path(td) / "noop.patch"
+            patch_path.write_text(
+                "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n"
+                "-VALUE = 1\n+VALUE = 1\n",
+                encoding="utf-8",
+            )
+            original = (root / "app.py").read_bytes()
+
+            result = verify_external_patch(
+                root,
+                patch_path,
+                allow_noop=True,
+                allow_project_code=True,
+                timeout_seconds=30,
+            )
+
+            self.assertEqual(result["status"], "REVIEW", result)
+            self.assertEqual(result["reason"], "intentional-noop-confirmed")
+            self.assertEqual(result["verification_level"], "candidate-identity")
+            self.assertTrue(result["intentional_noop_requested"])
+            identity = result["candidate_identity"]
+            self.assertTrue(identity["no_op"])
+            self.assertTrue(identity["intentional_noop"])
+            self.assertEqual(
+                identity["baseline_tree_sha256"],
+                identity["candidate_tree_sha256"],
+            )
+            self.assertEqual(identity["actual_changed_files"], [])
+            self.assertTrue(result["verification_oracle_identity"]["unchanged"])
+            self.assertFalse(result["project_checks"]["executed"])
+            self.assertEqual((root / "app.py").read_bytes(), original)
+
     def test_partial_patch_is_rejected_without_touching_original(self):
         with TemporaryDirectory() as td:
             root = Path(td) / "source"
