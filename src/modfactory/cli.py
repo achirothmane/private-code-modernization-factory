@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_patch.add_argument("--output", default=".modfactory", help="Output directory")
     verify_patch.add_argument("--allow-project-code", action="store_true",
                               help="Explicitly allow frozen project commands to run in temporary copies")
+    verify_patch.add_argument(
+        "--allow-noop",
+        action="store_true",
+        help="Explicitly accept an intentional patch that materializes no byte changes; returns REVIEW",
+    )
     verify_patch.add_argument("--provision-environments", action="store_true",
                               help="Provision separate baseline/target dependency environments before verification")
     verify_patch.add_argument("--timeout", type=int, default=120,
@@ -237,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
                 producer=args.producer,
                 behavior_contract=args.behavior_contract,
                 allow_project_code=args.allow_project_code,
+                allow_noop=args.allow_noop,
                 provision_environments=args.provision_environments,
                 timeout_seconds=args.timeout,
             )
