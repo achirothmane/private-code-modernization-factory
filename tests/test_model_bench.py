@@ -256,6 +256,47 @@ class ModelBenchmarkTests(unittest.TestCase):
             self.assertTrue(json_path.exists())
             self.assertTrue(md_path.exists())
 
+    def test_task_can_explicitly_allow_intentional_noop_as_review(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            plan, _ = self._request_repo(root)
+            task = plan["tasks"][0]
+            self.assertIsInstance(task, dict)
+            task["allow_noop"] = True
+            task_id = str(task["task_id"])
+            request = build_model_request(
+                plan,
+                task_id,
+                provider="example-provider",
+                model="ordinary-model",
+            )
+            diff = (
+                "--- a/test/b.test.js\n"
+                "+++ b/test/b.test.js\n"
+                "@@ -1 +1 @@\n"
+                "-const request = require('request');\n"
+                "+const request = require('request');\n"
+            )
+            response = self._response(request, diff)
+
+            score = score_model_response(root, request, response)
+
+            self.assertEqual(score["status"], "REVIEW", score)
+            self.assertEqual(score["reason"], "intentional-noop-confirmed")
+            self.assertEqual(score["verification_level"], "candidate-identity")
+            self.assertTrue(score["intentional_noop_requested"])
+            self.assertTrue(score["gates"]["intentional_noop_confirmed"])
+            identity = score["candidate_identity"]
+            self.assertTrue(identity["no_op"])
+            self.assertTrue(identity["intentional_noop"])
+            self.assertEqual(
+                identity["baseline_tree_sha256"],
+                identity["candidate_tree_sha256"],
+            )
+            self.assertEqual(identity["actual_changed_files"], [])
+            self.assertTrue(score["verification_oracle_identity"]["unchanged"])
+            self.assertFalse(score["project_checks"]["executed"])
+
     def test_project_tests_cannot_pass_when_patch_modifies_the_test_oracle(self):
         with TemporaryDirectory() as td:
             root = Path(td)
