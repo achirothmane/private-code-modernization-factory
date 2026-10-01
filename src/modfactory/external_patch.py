@@ -104,6 +104,7 @@ def verify_external_patch(
     producer: str | None = None,
     behavior_contract: str | Path | None = None,
     allow_project_code: bool = False,
+    allow_noop: bool = False,
     provision_environments: bool = False,
     timeout_seconds: int = 120,
 ) -> dict[str, object]:
@@ -158,6 +159,7 @@ def verify_external_patch(
         },
         "deployment_admissible": False,
         "requires_human_review": True,
+        "intentional_noop_requested": allow_noop,
     }
 
     if not diff_info.get("valid"):
@@ -221,18 +223,35 @@ def verify_external_patch(
             patch_sha256=patch_sha256,
         )
         base["candidate_identity"] = candidate_identity
-        if (
-            not candidate_identity["candidate_differs_from_baseline"]
-            or not candidate_identity["changed_files_match"]
-        ):
+        candidate_identity["intentional_noop"] = bool(
+            candidate_identity["no_op"] and allow_noop
+        )
+        if candidate_identity["no_op"]:
+            if not allow_noop:
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "patch-produced-no-candidate-change",
+                    "verification_level": "candidate-identity",
+                }
+            oracle_before = _verification_oracle_identity(before_root)
+            oracle_after = _verification_oracle_identity(after_root)
+            base["verification_oracle_identity"] = {
+                "before_sha256": oracle_before["sha256"],
+                "after_sha256": oracle_after["sha256"],
+                "unchanged": oracle_before["sha256"] == oracle_after["sha256"],
+            }
+            return {
+                **base,
+                "status": "REVIEW",
+                "reason": "intentional-noop-confirmed",
+                "verification_level": "candidate-identity",
+            }
+        if not candidate_identity["changed_files_match"]:
             return {
                 **base,
                 "status": "BLOCKED",
-                "reason": (
-                    "patch-produced-no-candidate-change"
-                    if candidate_identity["no_op"]
-                    else "candidate-identity-mismatch"
-                ),
+                "reason": "candidate-identity-mismatch",
                 "verification_level": "candidate-identity",
             }
 
@@ -516,6 +535,7 @@ def render_external_patch_markdown(result: dict[str, object]) -> str:
             f"- Actual changed files: {candidate_identity.get('actual_changed_files', [])}",
             f"- Changed files match: {candidate_identity.get('changed_files_match')}",
             f"- No-op: {candidate_identity.get('no_op')}",
+            f"- Intentional no-op: {candidate_identity.get('intentional_noop', False)}",
         ])
 
     oracle_identity = result.get("verification_oracle_identity")

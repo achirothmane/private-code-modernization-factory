@@ -805,6 +805,7 @@ def score_model_response(
     task = request.get("task")
     if not isinstance(task, dict):
         task = {}
+    allow_noop = task.get("allow_noop") is True
 
     base: dict[str, object] = {
         "schema_version": 1,
@@ -833,6 +834,7 @@ def score_model_response(
             "after": None,
         },
         "deployment_admissible": False,
+        "intentional_noop_requested": allow_noop,
     }
     if not request_valid:
         return {
@@ -917,18 +919,36 @@ def score_model_response(
             patch_sha256=_sha256_text(diff),
         )
         base["candidate_identity"] = candidate_identity
-        if (
-            not candidate_identity["candidate_differs_from_baseline"]
-            or not candidate_identity["changed_files_match"]
-        ):
+        candidate_identity["intentional_noop"] = bool(
+            candidate_identity["no_op"] and allow_noop
+        )
+        if candidate_identity["no_op"]:
+            if not allow_noop:
+                return {
+                    **base,
+                    "status": "BLOCKED",
+                    "reason": "patch-produced-no-candidate-change",
+                    "verification_level": "candidate-identity",
+                }
+            oracle_before = _verification_oracle_identity(before_root)
+            oracle_after = _verification_oracle_identity(after_root)
+            base["verification_oracle_identity"] = {
+                "before_sha256": oracle_before["sha256"],
+                "after_sha256": oracle_after["sha256"],
+                "unchanged": oracle_before["sha256"] == oracle_after["sha256"],
+            }
+            gates["intentional_noop_confirmed"] = True
+            return {
+                **base,
+                "status": "REVIEW",
+                "reason": "intentional-noop-confirmed",
+                "verification_level": "candidate-identity",
+            }
+        if not candidate_identity["changed_files_match"]:
             return {
                 **base,
                 "status": "BLOCKED",
-                "reason": (
-                    "patch-produced-no-candidate-change"
-                    if candidate_identity["no_op"]
-                    else "candidate-identity-mismatch"
-                ),
+                "reason": "candidate-identity-mismatch",
                 "verification_level": "candidate-identity",
             }
 
@@ -1198,6 +1218,8 @@ def write_model_score(score: dict[str, object], out_dir: str | Path) -> tuple[Pa
             f"- Declared changed files: {candidate_identity.get('declared_changed_files', [])}",
             f"- Actual changed files: {candidate_identity.get('actual_changed_files', [])}",
             f"- Changed files match: {candidate_identity.get('changed_files_match')}",
+            f"- No-op: {candidate_identity.get('no_op')}",
+            f"- Intentional no-op: {candidate_identity.get('intentional_noop', False)}",
         ])
     if isinstance(oracle_identity, dict):
         lines.extend([

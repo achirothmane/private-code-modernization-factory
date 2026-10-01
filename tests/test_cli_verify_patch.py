@@ -18,10 +18,12 @@ class VerifyPatchCliTests(unittest.TestCase):
             "--behavior-contract",
             "behavior.json",
             "--allow-project-code",
+            "--allow-noop",
         ])
         self.assertEqual(args.command, "verify-patch")
         self.assertEqual(args.behavior_contract, "behavior.json")
         self.assertTrue(args.allow_project_code)
+        self.assertTrue(args.allow_noop)
 
     def test_behavior_contract_requires_project_code_opt_in(self):
         code = main([
@@ -58,6 +60,7 @@ class VerifyPatchCliTests(unittest.TestCase):
                     "--behavior-contract",
                     "behavior.json",
                     "--allow-project-code",
+                    "--allow-noop",
                 ])
 
             self.assertEqual(code, 7)
@@ -66,6 +69,7 @@ class VerifyPatchCliTests(unittest.TestCase):
                 "behavior.json",
             )
             self.assertTrue(verify.call_args.kwargs["allow_project_code"])
+            self.assertTrue(verify.call_args.kwargs["allow_noop"])
 
 
 if __name__ == "__main__":
