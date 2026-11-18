@@ -1,5 +1,7 @@
 # ModFactory
 
+> **Long-term product vision:** [VISION.md](VISION.md) preserves ModFactory's broader software-evolution and independent-assurance horizon, while [CLAUDE.md](CLAUDE.md) directs agents to the real implementation, historical negative results and authority boundaries. These documents do not change the existing verifier, tests or approval semantics.
+
 **Independent verification for code-upgrade patches.**
 
 Coding agents, codemods, Renovate, Dependabot, and migration tools can generate a patch. ModFactory is the separate evidence layer that asks:
